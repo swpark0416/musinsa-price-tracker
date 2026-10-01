@@ -13,9 +13,7 @@ st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍�
 # ---------------------------------------------------------
 # 모바일 패딩 및 여백 최적화 CSS
 # ---------------------------------------------------------
-st.markdown("""
-<style>
-/* 여백 및 패딩 최소화 */
+st.markdown("""<style>
 .main .block-container {
     padding-left: 6px !important;
     padding-right: 6px !important;
@@ -23,14 +21,11 @@ st.markdown("""
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
-
-/* 글로벌 폰트 및 줄바꿈 보정 */
 p, span, div, h1, h2, h3, h4 {
     word-break: break-all !important;
     overflow-wrap: break-word !important;
 }
-</style>
-""", unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
 
 st.title("🛍️ 무신사 스마트 트래커")
 
@@ -308,7 +303,7 @@ with main_tab1:
 
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                selected_tag = st.selectbox("🏷️ 태그 필터", tag_options)
+                selected_tag = st.selectbox("🏷️️ 태그 필터", tag_options)
 
             filtered_products = products_df.copy()
             if selected_tag != "전체":
@@ -341,16 +336,7 @@ with main_tab1:
                     norm_price = int(latest_row['normal_price'])
                     curr_price = int(latest_row['price'])
 
-                    st.markdown(f"""
-                    <div style="background-color: #f8f9fa; padding: 10px 14px; border-radius: 8px; border: 1px solid #e9ecef; margin: 8px 0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px;">
-                            <div><span style="color: #6c757d;">정가:</span> <del style="color: #868e96;">{norm_price:,}원</del></div>
-                            <div><span style="color: #6c757d;">현재 판매가:</span> <b style="color: #212529; font-size: 13px;">{curr_price:,}원</b></div>
-                            <div><span style="color: #6c757d;">기간 내 최저가:</span> <b style="color: #1971c2;">{min_price:,}원</b></div>
-                            <div><span style="color: #6c757d;">최대 할인율:</span> <b style="color: #d9480f;">{max_discount}% 🔥</b></div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f"""<div style="background-color: #f8f9fa; padding: 10px 14px; border-radius: 8px; border: 1px solid #e9ecef; margin: 8px 0;"><div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px;"><div><span style="color: #6c757d;">정가:</span> <del style="color: #868e96;">{norm_price:,}원</del></div><div><span style="color: #6c757d;">현재 판매가:</span> <b style="color: #212529; font-size: 13px;">{curr_price:,}원</b></div><div><span style="color: #6c757d;">기간 내 최저가:</span> <b style="color: #1971c2;">{min_price:,}원</b></div><div><span style="color: #6c757d;">최대 할인율:</span> <b style="color: #d9480f;">{max_discount}% 🔥</b></div></div></div>""", unsafe_allow_html=True)
 
                 st.markdown(f"👉 [무신사 상품 페이지 바로가기]({product_info['url']})")
 
@@ -410,7 +396,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (순수 HTML 3열 고정 그리드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (코드 블록 방지 퍼펙트 3열 그리드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -492,9 +478,9 @@ with main_tab1:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
                 # -------------------------------------------------
-                # 순수 HTML/CSS 3열 그리드 (모바일 세로꺾임 & 잘림 100% 방지)
+                # 마크다운 코드 블록 파싱 원천 차단 (한 줄 연결 HTML)
                 # -------------------------------------------------
-                grid_html = '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%; box-sizing: border-box; margin-bottom: 15px;">'
+                cards_html_list = []
 
                 for _, row in filtered_tracked.iterrows():
                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
@@ -514,29 +500,27 @@ with main_tab1:
                         else:
                             price_html_str = f"{c_price:,}원"
 
-                    grid_html += f"""
-                    <div style="background: #ffffff; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between;">
-                        <div>
-                            <div style="font-size: 9px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                {brand}
-                            </div>
-                            <div style="font-size: 10px; font-weight: bold; color: #212529; line-height: 1.25; height: 25px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 4px 0;">
-                                {row['goods_name']}
-                            </div>
-                        </div>
-                        <div>
-                            <div style="font-size: 10px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px;">
-                                {price_html_str}
-                            </div>
-                            <div style="font-size: 9px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 1px 4px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
-                                🏷️ {curr_tag}
-                            </div>
-                        </div>
-                    </div>
-                    """
+                    single_card = (
+                        f'<div style="background:#ffffff; border:1px solid #e9ecef; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;">'
+                        f'<div>'
+                        f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
+                        f'<div style="font-size:10px; font-weight:bold; color:#212529; line-height:1.25; height:25px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin:2px 0 4px 0;">{row["goods_name"]}</div>'
+                        f'</div>'
+                        f'<div>'
+                        f'<div style="font-size:10px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:3px;">{price_html_str}</div>'
+                        f'<div style="font-size:9px; color:#2b8a3e; background:#e6fcf5; display:inline-block; padding:1px 4px; border-radius:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">🏷️ {curr_tag}</div>'
+                        f'</div>'
+                        f'</div>'
+                    )
+                    cards_html_list.append(single_card)
 
-                grid_html += '</div>'
-                st.markdown(grid_html, unsafe_allow_html=True)
+                full_grid_html = (
+                    f'<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; width:100%; box-sizing:border-box; margin-bottom:15px;">'
+                    f'{"".join(cards_html_list)}'
+                    f'</div>'
+                )
+
+                st.markdown(full_grid_html, unsafe_allow_html=True)
 
                 # -------------------------------------------------
                 # 하단 전용 상품 관리 패널 (태그 수정 및 삭제)
