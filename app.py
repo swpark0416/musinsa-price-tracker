@@ -70,7 +70,7 @@ def parse_goods_id(url_or_id):
     return None
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보를 수집합니다."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -103,6 +103,7 @@ def get_musinsa_goods_info(goods_id):
                             data = data["data"]
 
                         goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
+                        brand_name = data.get("brandNm") or data.get("brandName") or data.get("brand", {}).get("brandName", "")
                         price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
                         normal_price = data.get("normalPrice") or data.get("originalPrice") or price
                         image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or ""
@@ -122,6 +123,7 @@ def get_musinsa_goods_info(goods_id):
                             return {
                                 "goods_id": str(goods_id),
                                 "goods_name": goods_name,
+                                "brand_name": brand_name or "MUSINSA",
                                 "image_url": image_url,
                                 "category": category,
                                 "normal_price": normal_price,
@@ -137,6 +139,11 @@ def get_musinsa_goods_info(goods_id):
                     re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
                     re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
                     re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
+                )
+                brand_match = (
+                    re.search(r'<meta\s+property="product:brand"\s+content="([^"]+)"', raw_text) or
+                    re.search(r'"brandNm"\s*:\s*"([^"]+)"', raw_text) or
+                    re.search(r'"brandName"\s*:\s*"([^"]+)"', raw_text)
                 )
                 price_match = (
                     re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
@@ -155,6 +162,7 @@ def get_musinsa_goods_info(goods_id):
 
                 if name_match and price_match:
                     goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
+                    brand_name = brand_match.group(1) if brand_match else "MUSINSA"
                     price = int(price_match.group(1))
                     normal_price = int(normal_price_match.group(1)) if normal_price_match else price
                     image_url = image_match.group(1) if image_match else ""
@@ -167,6 +175,7 @@ def get_musinsa_goods_info(goods_id):
                     return {
                         "goods_id": str(goods_id),
                         "goods_name": goods_name,
+                        "brand_name": brand_name,
                         "image_url": image_url,
                         "category": "의류",
                         "normal_price": normal_price,
@@ -190,7 +199,6 @@ def load_price_logs():
     res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
     df = pd.DataFrame(res.data)
     if not df.empty:
-        # 수동 수정으로 날짜 포맷이 다양해져도 안전하게 파싱 (혼합 문자열 & 타임존 호환)
         df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
         df = df.dropna(subset=["created_at"])
         
@@ -235,6 +243,9 @@ with tab1:
             with card_col1:
                 render_image(product_info.get("image_url"), use_container_width=True)
             with card_col2:
+                # 🏷️ 브랜드명 표기 추가
+                brand = product_info.get("brand_name") or "MUSINSA"
+                st.caption(f"🏷️ **{brand}**")
                 st.subheader(product_info["goods_name"])
                 st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
                 
@@ -242,15 +253,23 @@ with tab1:
                 
                 if not product_logs.empty:
                     latest_row = product_logs.iloc[-1]
-                    min_price = product_logs["price"].min()
+                    min_price = int(product_logs["price"].min())
                     max_discount = product_logs["discount_rate"].max()
+                    norm_price = int(latest_row['normal_price'])
+                    curr_price = int(latest_row['price'])
 
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.markdown(f"**최근 정가**\n\n~~{int(latest_row['normal_price']):,} 원~~")
-                    m2.metric("최근 판매가", f"{int(latest_row['price']):,} 원")
-                    m3.metric("기간 내 최저가", f"{int(min_price):,} 원")
-                    m4.metric("최대 할인율", f"{max_discount}% 🔥")
-                
+                    # 📦 한눈에 들어오는 단일 요약 박스 (글자 크기 축소 및 컴팩트 배치)
+                    st.markdown(f"""
+                    <div style="background-color: #f8f9fa; padding: 12px 16px; border-radius: 8px; border: 1px solid #e9ecef; margin: 10px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 13px;">
+                            <div><span style="color: #6c757d;">정가:</span> <del style="color: #868e96;">{norm_price:,}원</del></div>
+                            <div><span style="color: #6c757d;">현재 판매가:</span> <b style="color: #212529; font-size: 14px;">{curr_price:,}원</b></div>
+                            <div><span style="color: #6c757d;">기간 내 최저가:</span> <b style="color: #1971c2;">{min_price:,}원</b></div>
+                            <div><span style="color: #6c757d;">최대 할인율:</span> <b style="color: #d9480f;">{max_discount}% 🔥</b></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
                 st.markdown(f"👉 [무신사 상품 페이지 바로가기]({product_info['url']})")
 
             st.divider()
@@ -258,8 +277,9 @@ with tab1:
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
                 
-                min_p = int(product_logs["price"].min())
-                max_p = int(product_logs["price"].max())
+                # Y축 범위 계산
+                min_p = int(product_logs[["price", "normal_price"]].min().min())
+                max_p = int(product_logs[["price", "normal_price"]].max().max())
 
                 if min_p == max_p:
                     y_min = max(0, min_p - 3000)
@@ -268,34 +288,39 @@ with tab1:
                     y_min = max(0, min_p - 2000)
                     y_max = max_p + 2000
 
-                # 1. 판매가 변동 추이 (1,000원 단위 간격)
+                # 1. 판매가 + 정가 동시 변동 추이 선 그래프
                 fig_price = px.line(
                     product_logs, 
                     x="created_at", 
-                    y="price", 
-                    title="판매가 변동 추이 (원)", 
+                    y=["price", "normal_price"], 
+                    title="가격 변동 추이 (판매가 vs 정가)", 
                     markers=True,
-                    labels={"created_at": "날짜", "price": "판매가 (원)"}
+                    labels={"created_at": "날짜", "value": "가격 (원)", "variable": "구분"}
                 )
+                
+                # 범례 이름 한글 설정
+                newnames = {'price': '현재 판매가', 'normal_price': '정가'}
+                fig_price.for_each_trace(lambda t: t.update(name=newnames.get(t.name, t.name)))
+
                 fig_price.update_xaxes(
-                    dtick="D1",                  # 일(Day) 단위 격자
-                    tickformat="%Y-%m-%d"        # YYYY-MM-DD 날짜 포맷
+                    dtick="D1",
+                    tickformat="%Y-%m-%d"
                 )
                 fig_price.update_yaxes(
-                    dtick=1000,                  # 눈금 간격 1,000원 단위 고정
-                    range=[y_min, y_max],        # Y축 최소/최대 범위 고정
-                    tickformat=",d",             # 천 단위 콤마(,) 및 정수 표기
-                    ticksuffix="원"              # 숫자 뒤 '원' 붙이기
+                    dtick=1000,                  # 1,000원 단위 간격
+                    range=[y_min, y_max],
+                    tickformat=",d",             # 천 단위 콤마
+                    ticksuffix="원"
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
 
-                # 2. 할인율 변동 추이 (%)
-                fig_discount = px.bar(
+                # 2. 할인율 변동 추이 (꺾은선 그래프로 변경)
+                fig_discount = px.line(
                     product_logs, 
                     x="created_at", 
                     y="discount_rate", 
                     title="할인율 변동 추이 (%)", 
-                    text_auto=True,
+                    markers=True,
                     labels={"created_at": "날짜", "discount_rate": "할인율 (%)"}
                 )
                 fig_discount.update_xaxes(
@@ -335,6 +360,7 @@ with tab2:
                         prod_data = {
                             "goods_id": info["goods_id"],
                             "goods_name": info["goods_name"],
+                            "brand_name": info["brand_name"],
                             "image_url": info["image_url"],
                             "category": info["category"],
                             "tags": input_tags,
@@ -349,7 +375,7 @@ with tab2:
                         }
                         supabase.table("price_logs").insert(log_data).execute()
 
-                        st.success(f"✅ **[{info['goods_name']}]** 상품이 성공적으로 등록되었습니다!")
+                        st.success(f"✅ **[{info['brand_name']}] {info['goods_name']}** 상품이 성공적으로 등록되었습니다!")
                         st.rerun()
                     else:
                         st.error("🚨 상품 정보 수집에 실패하여 DB에 등록하지 못했습니다.")
@@ -365,7 +391,8 @@ with tab2:
             with col_img:
                 render_image(row.get("image_url"), width=80)
             with col_desc:
-                st.markdown(f"**{row['goods_name']}** (ID: `{row['goods_id']}`)")
+                brand = row.get("brand_name") or "MUSINSA"
+                st.markdown(f"**[{brand}] {row['goods_name']}** (ID: `{row['goods_id']}`)")
                 st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
             with col_del:
                 if st.button("🗑️ 삭제", key=f"del_{row['goods_id']}"):
@@ -398,6 +425,7 @@ with tab3:
                         with tc1:
                             render_image(live.get("image_url"), use_container_width=True)
                         with tc2:
+                            st.write(f"**브랜드:** {live['brand_name']}")
                             st.write(f"**상품명:** {live['goods_name']}")
                             st.write(f"**카테고리:** {live['category']}")
                             st.markdown(f"**정가:** ~~{live['normal_price']:,} 원~~")
