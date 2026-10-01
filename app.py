@@ -272,26 +272,30 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) CP949 + 이중 정규식 품절 강제 차단 크롤러
+# 자바나스(MakeShop) 모바일 URL 기반 정밀 크롤러 (L - 품절 100% 필터링)
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """CP949 디코딩으로 자바나스의 최상위 카테고리만 깔끔하게 수집합니다."""
+    """자바나스의 최상위 카테고리만 깔끔하게 수집합니다."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     }
     categories = {}
     
     urls_to_scan = [
+        "https://zavanas.com/m/index.html",
         "https://zavanas.com/shop/shopbrand.html?xcode=001",
-        "https://zavanas.com/index.html",
-        "https://zavanas.com/m/index.html"
+        "https://zavanas.com/index.html"
     ]
     
     for target_url in urls_to_scan:
         try:
             res = requests.get(target_url, headers=headers, timeout=5)
-            html_text = html.unescape(res.content.decode('cp949', 'ignore'))
+            try:
+                html_text = html.unescape(res.content.decode('cp949', 'errors'))
+            except Exception:
+                html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
+                
             soup = BeautifulSoup(html_text, "html.parser")
             
             for a_tag in soup.find_all('a', href=True):
@@ -334,9 +338,9 @@ def get_zavanas_categories():
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 (동적 품절 이중 강제 검증)."""
+    """모바일 상세 URL(m/product.html)을 사용하여 L사이즈 품절 상태를 100% 감지 및 걸러냅니다."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     }
     
     available_items = []
@@ -345,22 +349,32 @@ def fetch_zabanus_l_stock(category_name, category_url):
         if res.status_code != 200:
             return []
 
-        html_text = html.unescape(res.content.decode('cp949', 'ignore'))
+        try:
+            html_text = html.unescape(res.content.decode('cp949', 'errors'))
+        except Exception:
+            html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
+
         soup = BeautifulSoup(html_text, "html.parser")
         
+        # 상품 branduid 추출 후 모바일 전용 상세페이지 주소(m/product.html)로 재구성
         product_links = []
-        for a_tag in soup.select('a[href*="shopdetail.html"]'):
+        for a_tag in soup.select('a[href*="branduid="]'):
             href = a_tag.get('href', '')
-            if "branduid=" in href:
-                full_url = "https://zavanas.com" + href if href.startswith("/") else href
-                if full_url not in product_links:
-                    product_links.append(full_url)
+            match = re.search(r'branduid=(\d+)', href)
+            if match:
+                buid = match.group(1)
+                mobile_url = f"https://zavanas.com/m/product.html?branduid={buid}"
+                if mobile_url not in product_links:
+                    product_links.append(mobile_url)
 
         for prod_link in product_links[:20]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
-                # HTML 복원
-                detail_html = html.unescape(detail_res.content.decode('cp949', 'ignore'))
+                try:
+                    detail_html = html.unescape(detail_res.content.decode('cp949', 'errors'))
+                except Exception:
+                    detail_html = html.unescape(detail_res.content.decode('utf-8', 'ignore'))
+
                 detail_soup = BeautifulSoup(detail_html, "html.parser")
                 
                 # --- 1. 상품명 정밀 파싱 ---
@@ -411,7 +425,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not price:
                     price = "가격 확인"
 
-                # --- 4. 옵션(L사이즈) 품절 상태 1단계 검사 ---
+                # --- 4. 모바일 옵션 태그에서 L사이즈 및 품절 여부 검사 ---
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
@@ -423,12 +437,15 @@ def fetch_zabanus_l_stock(category_name, category_url):
                     if not opt_val or opt_val in ["0", "none", ""] or "선택" in opt_text:
                         continue
 
-                    # L / LARGE / 100 단독 사이즈 매칭
+                    # L / LARGE / 100 사이즈 단독 매칭
                     is_l_size = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
 
                     combined_str = f"{opt_text} {opt_val}".upper().replace(" ", "")
                     is_soldout = (
-                        bool(re.search(r'품\s*절|SOLDOUT|OUTOFSTOCK|재고\s*없음|DISABLED', combined_str))
+                        ("품절" in opt_text)
+                        or ("SOLDOUT" in combined_str)
+                        or ("OUTOFSTOCK" in combined_str)
+                        or ("재고없음" in combined_str)
                         or opt.has_attr('disabled')
                         or 'disabled' in opt.get('class', [])
                     )
@@ -437,14 +454,13 @@ def fetch_zabanus_l_stock(category_name, category_url):
                         has_l_size = True
                         l_options_found.append(opt_text)
 
-                # --- 5. [핵심] 원문 스크립트/HTML 2단계 품절 강제 차단 (Fail-safe) ---
-                # 페이지 원문에 'L - 품절', 'L-품절', 'L(품절)', 'L [품절]', 'L : 품절' 등이 감지되면 무조건 제외
-                soldout_l_patterns = [
+                # --- 5. 원문 HTML 강제 2차 검증 (Fail-Safe) ---
+                # 페이지 원문에 'L - 품절', 'L-품절', 'L(품절)' 문구가 포함되어 있다면 무조건 차단
+                soldout_patterns = [
                     r'(?<![A-Z0-9])(?:L|LARGE|100)\s*[\-\:\(\[\_\s]*품\s*절',
                     r'품\s*절\s*[\-\:\(\[\_\s]*(?<![A-Z0-9])(?:L|LARGE|100)(?![A-Z0-9])'
                 ]
-
-                for pat in soldout_l_patterns:
+                for pat in soldout_patterns:
                     if re.search(pat, detail_html, re.IGNORECASE):
                         has_l_size = False
                         l_options_found = []
