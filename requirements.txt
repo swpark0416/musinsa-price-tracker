@@ -3,3 +3,4 @@ supabase
 requests
 pandas
 plotly
+beautifulsoup4
