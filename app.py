@@ -26,33 +26,32 @@ def parse_goods_id(url_or_id):
     """모바일 앱 공유 링크(onelink.me), 단축 URL, 일반 웹주소에서 진짜 상품 ID(6~8자리)를 추출합니다."""
     text = url_or_id.strip()
     
-    # 1. URL이 들어온 경우 실제 웹페이지 주소로 끝까지 추적 (onelink.me 등 처리)
+    # 1. URL인 경우 실제 웹페이지 주소로 끝까지 추적 (onelink.me 리다이렉트 처리)
     if text.startswith("http"):
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0"
         }
         try:
             res = requests.get(text, headers=headers, allow_redirects=True, timeout=5)
-            text = res.url  # 최종 이동된 무신사 웹 URL
+            text = res.url
             
-            # 페이지 본문에서 canonical 링크 또는 products/goods ID 탐색
             match_body = re.search(r'musinsa\.com/(?:app/goods|products)/(\d+)', res.text)
             if match_body:
                 return match_body.group(1)
         except Exception:
             pass
 
-    # 2. /goods/숫자 또는 /products/숫자 패턴 우선 추출
+    # 2. /goods/숫자 또는 /products/숫자 패턴 추출
     match = re.search(r'(?:goods|products)/(\d+)', text)
     if match:
         return match.group(1)
 
-    # 3. 무신사 상품 ID 스펙인 5~8자리 연속 숫자만 추출 (94 같은 2자리 노이즈 숫자 무시)
+    # 3. 무신사 상품 ID 스펙인 5~8자리 연속 숫자 추출
     digits = re.findall(r'\b\d{5,8}\b', text)
     if digits:
         return digits[0]
 
-    # 4. 예외 케이스: 가장 긴 숫자열 (4자리 이상)
+    # 4. 예외 케이스: 4자리 이상 가장 긴 숫자열
     all_digits = re.findall(r'\d+', text)
     if all_digits:
         longest = max(all_digits, key=len)
@@ -64,7 +63,7 @@ def parse_goods_id(url_or_id):
 def get_musinsa_goods_info(goods_id):
     """
     무신사 상품 정보를 수집합니다.
-    HTTP 200 응답 시 JSON 구조 및 HTML 메타태그/정규식을 동시 활용하여 100% 파싱합니다.
+    JSON API 및 HTML 본문 정규식 파싱을 순차적으로 시도하여 수집합니다.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
@@ -90,9 +89,7 @@ def get_musinsa_goods_info(goods_id):
             if res.status_code == 200:
                 raw_text = res.text
 
-                # ---------------------------------------------------------
                 # 1차 시도: JSON 직접 파싱
-                # ---------------------------------------------------------
                 try:
                     data = res.json()
                     if isinstance(data, dict):
@@ -129,9 +126,7 @@ def get_musinsa_goods_info(goods_id):
                 except Exception:
                     pass
 
-                # ---------------------------------------------------------
-                # 2차 시도: 200 OK 본문 전체 정규식 추출 (JSON 넥스트 데이터 & HTML 메타태그)
-                # ---------------------------------------------------------
+                # 2차 시도: HTML 메타태그 및 정규식 추출
                 name_match = (
                     re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
                     re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
@@ -179,107 +174,6 @@ def get_musinsa_goods_info(goods_id):
 
     st.error(f"❌ 무신사 데이터 파싱 실패 (HTTP 상태 코드: {last_status or 'Timeout'})")
     return None
-
-        "Referer": f"https://www.musinsa.com/products/{goods_id}",
-        "Origin": "https://www.musinsa.com"
-    }
-
-    # 2. PC 웹 브라우저 헤더
-    pc_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/html, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-
-    # 시도할 API 엔드포인트 및 헤더 조합
-    endpoints = [
-        (f"https://goods-detail.musinsa.com/goods/{goods_id}", mobile_headers),
-        (f"https://goods-detail.musinsa.com/api/goods/v2/goods/{goods_id}", mobile_headers),
-        (f"https://goods-detail.musinsa.com/goods/{goods_id}", pc_headers),
-        (f"https://www.musinsa.com/products/{goods_id}", pc_headers)
-    ]
-
-    session = requests.Session()
-    last_status = None
-
-    for url, headers in endpoints:
-        try:
-            res = session.get(url, headers=headers, timeout=6)
-            last_status = res.status_code
-
-            if res.status_code == 200:
-                # A. JSON API 응답 처리
-                if "json" in res.headers.get("Content-Type", "") or url.startswith("https://goods-detail"):
-                    try:
-                        json_data = res.json()
-                        data = json_data.get("data", json_data)
-
-                        goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name")
-                        price = data.get("price") or data.get("salePrice") or data.get("finalPrice", 0)
-                        normal_price = data.get("normalPrice") or data.get("originalPrice", price)
-                        image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image", "")
-
-                        category = "기타"
-                        cat_info = data.get("category")
-                        if isinstance(cat_info, dict):
-                            category = cat_info.get("categoryDepth2Name") or cat_info.get("categoryDepth1Name", "기타")
-                        elif isinstance(data.get("categoryName"), str):
-                            category = data.get("categoryName")
-
-                        if image_url and not image_url.startswith("http"):
-                            image_url = f"https:{image_url}"
-
-                        discount_rate = 0
-                        if normal_price and normal_price > price:
-                            discount_rate = round(((normal_price - price) / normal_price) * 100, 1)
-
-                        if goods_name and price:
-                            return {
-                                "goods_id": str(goods_id),
-                                "goods_name": goods_name,
-                                "image_url": image_url,
-                                "category": category,
-                                "normal_price": normal_price,
-                                "price": price,
-                                "discount_rate": discount_rate,
-                                "url": f"https://www.musinsa.com/products/{goods_id}"
-                            }
-                    except Exception:
-                        pass
-
-                # B. HTML 파싱 (__NEXT_DATA__)
-                if "<html" in res.text.lower() or "<script" in res.text.lower():
-                    next_data = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text, re.DOTALL)
-                    if next_data:
-                        pj = json.loads(next_data.group(1)).get("props", {}).get("pageProps", {})
-                        gdata = pj.get("goods") or pj.get("product") or pj.get("state", {}).get("goods", {})
-                        if gdata:
-                            gname = gdata.get("goodsNm") or gdata.get("name")
-                            pr = gdata.get("price") or gdata.get("salePrice", 0)
-                            npr = gdata.get("normalPrice", pr)
-                            img = gdata.get("thumbnailImageUrl") or gdata.get("imageUrl", "")
-                            if img and not img.startswith("http"):
-                                img = f"https:{img}"
-
-                            dr = round(((npr - pr) / npr) * 100, 1) if npr > pr else 0
-                            if gname and pr:
-                                return {
-                                    "goods_id": str(goods_id),
-                                    "goods_name": gname,
-                                    "image_url": img,
-                                    "category": "의류",
-                                    "normal_price": npr,
-                                    "price": pr,
-                                    "discount_rate": dr,
-                                    "url": f"https://www.musinsa.com/products/{goods_id}"
-                                }
-        except Exception:
-            continue
-
-    st.error(f"❌ 무신사 서버 접근 실패 (최종 HTTP 상태 코드: {last_status or 'Timeout'})")
-    return None
-
-
 
 # DB 데이터 렌더링 헬퍼
 def load_tracked_products():
@@ -467,4 +361,4 @@ with tab3:
                             st.markdown(f"**할인율:** {live['discount_rate']}% 🔥")
                             st.markdown(f"👉 [페이지 열기]({live['url']})")
                     else:
-                        st.error("🚨 실시간 가격 조회에 실패했습니다. 위의 실패 원인 메시지를 확인해 주세요.")
+                        st.error("🚨 실시간 가격 조회에 실패했습니다.")
