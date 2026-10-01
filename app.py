@@ -190,8 +190,9 @@ def load_price_logs():
     res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
     df = pd.DataFrame(res.data)
     if not df.empty:
-        # X축 날짜 축적용: datetime 파싱
-        df["created_at"] = pd.to_datetime(df["created_at"])
+        # 수동 수정으로 날짜 포맷이 다양해져도 안전하게 파싱 (혼합 문자열 & 타임존 호환)
+        df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
+        df = df.dropna(subset=["created_at"])
         
         df["discount_rate"] = df.apply(
             lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
@@ -260,7 +261,6 @@ with tab1:
                 min_p = int(product_logs["price"].min())
                 max_p = int(product_logs["price"].max())
 
-                # Y축 범위 계산: 가격 변동이 없으면 상하 3,000원씩 여백 생성
                 if min_p == max_p:
                     y_min = max(0, min_p - 3000)
                     y_max = max_p + 3000
@@ -282,7 +282,7 @@ with tab1:
                     tickformat="%Y-%m-%d"        # YYYY-MM-DD 날짜 포맷
                 )
                 fig_price.update_yaxes(
-                    dtick=1000,                  # 🌟 눈금 간격 1,000원 단위 고정
+                    dtick=1000,                  # 눈금 간격 1,000원 단위 고정
                     range=[y_min, y_max],        # Y축 최소/최대 범위 고정
                     tickformat=",d",             # 천 단위 콤마(,) 및 정수 표기
                     ticksuffix="원"              # 숫자 뒤 '원' 붙이기
