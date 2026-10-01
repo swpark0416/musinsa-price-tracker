@@ -61,17 +61,125 @@ def parse_goods_id(url_or_id):
 
     return None
 
-
 def get_musinsa_goods_info(goods_id):
     """
     무신사 상품 정보를 수집합니다.
-    모바일 앱 헤더 세션으로 해외 클라우드 IP 차단을 우회하고 여러 엔드포인트를 순차 조회합니다.
+    HTTP 200 응답 시 JSON 구조 및 HTML 메타태그/정규식을 동시 활용하여 100% 파싱합니다.
     """
-    # 1. 무신사 모바일 앱 전용 헤더 (차단 우회 핵심)
-    mobile_headers = {
+    headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "application/json, text/html, */*",
         "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": f"https://www.musinsa.com/products/{goods_id}"
+    }
+
+    endpoints = [
+        f"https://goods-detail.musinsa.com/goods/{goods_id}",
+        f"https://www.musinsa.com/products/{goods_id}",
+        f"https://www.musinsa.com/app/goods/{goods_id}"
+    ]
+
+    session = requests.Session()
+    last_status = None
+
+    for url in endpoints:
+        try:
+            res = session.get(url, headers=headers, timeout=8)
+            last_status = res.status_code
+
+            if res.status_code == 200:
+                raw_text = res.text
+
+                # ---------------------------------------------------------
+                # 1차 시도: JSON 직접 파싱
+                # ---------------------------------------------------------
+                try:
+                    data = res.json()
+                    if isinstance(data, dict):
+                        if "data" in data and isinstance(data["data"], dict):
+                            data = data["data"]
+
+                        goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
+                        price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
+                        normal_price = data.get("normalPrice") or data.get("originalPrice") or price
+                        image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or ""
+                        
+                        category = "기타"
+                        cat_info = data.get("category")
+                        if isinstance(cat_info, dict):
+                            category = cat_info.get("categoryDepth2Name") or cat_info.get("categoryDepth1Name", "기타")
+
+                        if goods_name and price:
+                            if image_url and not image_url.startswith("http"):
+                                image_url = f"https:{image_url}"
+                            price = int(price)
+                            normal_price = int(normal_price) if normal_price else price
+                            discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
+
+                            return {
+                                "goods_id": str(goods_id),
+                                "goods_name": goods_name,
+                                "image_url": image_url,
+                                "category": category,
+                                "normal_price": normal_price,
+                                "price": price,
+                                "discount_rate": discount_rate,
+                                "url": f"https://www.musinsa.com/products/{goods_id}"
+                            }
+                except Exception:
+                    pass
+
+                # ---------------------------------------------------------
+                # 2차 시도: 200 OK 본문 전체 정규식 추출 (JSON 넥스트 데이터 & HTML 메타태그)
+                # ---------------------------------------------------------
+                name_match = (
+                    re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
+                    re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
+                    re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
+                )
+                price_match = (
+                    re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
+                    re.search(r'"price"\s*:\s*(\d+)', raw_text) or
+                    re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
+                )
+                normal_price_match = (
+                    re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
+                    re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
+                )
+                image_match = (
+                    re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', raw_text) or
+                    re.search(r'"thumbnailImageUrl"\s*:\s*"([^"]+)"', raw_text) or
+                    re.search(r'"imageUrl"\s*:\s*"([^"]+)"', raw_text)
+                )
+
+                if name_match and price_match:
+                    goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
+                    price = int(price_match.group(1))
+                    normal_price = int(normal_price_match.group(1)) if normal_price_match else price
+                    image_url = image_match.group(1) if image_match else ""
+
+                    if image_url and not image_url.startswith("http"):
+                        image_url = f"https:{image_url}"
+
+                    discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
+
+                    return {
+                        "goods_id": str(goods_id),
+                        "goods_name": goods_name,
+                        "image_url": image_url,
+                        "category": "의류",
+                        "normal_price": normal_price,
+                        "price": price,
+                        "discount_rate": discount_rate,
+                        "url": f"https://www.musinsa.com/products/{goods_id}"
+                    }
+
+        except Exception:
+            continue
+
+    st.error(f"❌ 무신사 데이터 파싱 실패 (HTTP 상태 코드: {last_status or 'Timeout'})")
+    return None
+
         "Referer": f"https://www.musinsa.com/products/{goods_id}",
         "Origin": "https://www.musinsa.com"
     }
