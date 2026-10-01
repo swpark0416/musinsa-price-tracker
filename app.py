@@ -6,6 +6,7 @@ import requests
 import json
 import re
 import time
+import html
 from bs4 import BeautifulSoup
 
 # 페이지 기본 설정
@@ -271,7 +272,7 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) CP949 인코딩 기반 카테고리/재고 정밀 크롤러
+# 자바나스(MakeShop) CP949 + 이중 정규식 품절 강제 차단 크롤러
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
@@ -290,7 +291,7 @@ def get_zavanas_categories():
     for target_url in urls_to_scan:
         try:
             res = requests.get(target_url, headers=headers, timeout=5)
-            html_text = res.content.decode('cp949', 'ignore')
+            html_text = html.unescape(res.content.decode('cp949', 'ignore'))
             soup = BeautifulSoup(html_text, "html.parser")
             
             for a_tag in soup.find_all('a', href=True):
@@ -333,7 +334,7 @@ def get_zavanas_categories():
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 (품절 상태 100% 검증)."""
+    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 (동적 품절 이중 강제 검증)."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -344,7 +345,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
         if res.status_code != 200:
             return []
 
-        html_text = res.content.decode('cp949', 'ignore')
+        html_text = html.unescape(res.content.decode('cp949', 'ignore'))
         soup = BeautifulSoup(html_text, "html.parser")
         
         product_links = []
@@ -358,7 +359,8 @@ def fetch_zabanus_l_stock(category_name, category_url):
         for prod_link in product_links[:20]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
-                detail_html = detail_res.content.decode('cp949', 'ignore')
+                # HTML 복원
+                detail_html = html.unescape(detail_res.content.decode('cp949', 'ignore'))
                 detail_soup = BeautifulSoup(detail_html, "html.parser")
                 
                 # --- 1. 상품명 정밀 파싱 ---
@@ -409,7 +411,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not price:
                     price = "가격 확인"
 
-                # --- 4. 옵션(L사이즈) 품절 상태 100% 검증 ---
+                # --- 4. 옵션(L사이즈) 품절 상태 1단계 검사 ---
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
@@ -418,17 +420,15 @@ def fetch_zabanus_l_stock(category_name, category_url):
                     opt_text = opt.text.strip()
                     opt_val = opt.get('value', '').strip()
 
-                    # 기본 가이드 문구 및 빈 값은 검사에서 제외
                     if not opt_val or opt_val in ["0", "none", ""] or "선택" in opt_text:
                         continue
 
-                    # L / LARGE / 100 사이즈 정확한 매칭 (단독 단어 매칭)
+                    # L / LARGE / 100 단독 사이즈 매칭
                     is_l_size = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
 
-                    # 품절 여부 종합 검사 (표시 텍스트 + Value 속성 + 태그 disabled 여부)
-                    combined_check_str = f"{opt_text} {opt_val}".upper().replace(" ", "")
+                    combined_str = f"{opt_text} {opt_val}".upper().replace(" ", "")
                     is_soldout = (
-                        bool(re.search(r'품\s*절|SOLDOUT|OUTOFSTOCK|재고\s*없음|DISABLED', combined_check_str))
+                        bool(re.search(r'품\s*절|SOLDOUT|OUTOFSTOCK|재고\s*없음|DISABLED', combined_str))
                         or opt.has_attr('disabled')
                         or 'disabled' in opt.get('class', [])
                     )
@@ -436,6 +436,19 @@ def fetch_zabanus_l_stock(category_name, category_url):
                     if is_l_size and not is_soldout:
                         has_l_size = True
                         l_options_found.append(opt_text)
+
+                # --- 5. [핵심] 원문 스크립트/HTML 2단계 품절 강제 차단 (Fail-safe) ---
+                # 페이지 원문에 'L - 품절', 'L-품절', 'L(품절)', 'L [품절]', 'L : 품절' 등이 감지되면 무조건 제외
+                soldout_l_patterns = [
+                    r'(?<![A-Z0-9])(?:L|LARGE|100)\s*[\-\:\(\[\_\s]*품\s*절',
+                    r'품\s*절\s*[\-\:\(\[\_\s]*(?<![A-Z0-9])(?:L|LARGE|100)(?![A-Z0-9])'
+                ]
+
+                for pat in soldout_l_patterns:
+                    if re.search(pat, detail_html, re.IGNORECASE):
+                        has_l_size = False
+                        l_options_found = []
+                        break
 
                 if has_l_size:
                     available_items.append({
