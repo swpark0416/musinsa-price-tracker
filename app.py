@@ -272,11 +272,11 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 메인 카테고리 복원 및 L재고 정밀 크롤러
+# 자바나스(MakeShop) PC/모바일 정밀 정제 크롤러
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """자바나스의 최상위 순수 카테고리만 깔끔하게 중복 없이 수집합니다."""
+    """자바나스의 최상위 메인 카테고리만 깔끔하게 수집합니다."""
     pc_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -287,7 +287,6 @@ def get_zavanas_categories():
         "https://zavanas.com/index.html"
     ]
     
-    # 누락 방지 기본 카테고리 사전
     default_map = {
         "001": "A헤비코튼/자켓/특가",
         "002": "B에센셜피마스판",
@@ -325,7 +324,6 @@ def get_zavanas_categories():
                     is_product_title = bool(re.match(r'^\d{2,4}\s', clean_name)) or len(clean_name) > 15
                     
                     if len(clean_name) > 1 and not is_product_title and not any(w == clean_name.upper() for w in ignore_words):
-                        # 하위 카테고리(mcode)가 있는 주소 중 대표 카테고리가 아니면 건너뜀
                         if "mcode=" in href and "mcode=000" not in href:
                             continue
 
@@ -334,7 +332,6 @@ def get_zavanas_categories():
                         if not existing_key:
                             categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
                         else:
-                            # 이미 등록된 것보다 더 짧은 대표 명칭으로 교체
                             existing_name = existing_key.split(']', 1)[-1].strip()
                             if len(clean_name) < len(existing_name):
                                 del categories[existing_key]
@@ -342,7 +339,6 @@ def get_zavanas_categories():
         except Exception:
             pass
 
-    # 누락된 대표 카테고리가 있다면 사전에 정의된 명칭으로 보완
     for xcode, default_title in default_map.items():
         dict_key = f"[{xcode}] {default_title}"
         if not any(k.startswith(f"[{xcode}]") for k in categories):
@@ -353,7 +349,7 @@ def get_zavanas_categories():
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """PC 카테고리 목록에서 상품을 추출하고 모바일 상세에서 L사이즈 품절 상태를 100% 걸러냅니다."""
+    """PC 페이지(정보 파싱) + 모바일 페이지(L-품절 검증) 교차 체크 크롤러"""
     pc_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -374,7 +370,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
 
         soup = BeautifulSoup(html_text, "html.parser")
         
-        # 카테고리 페이지 내의 모든 branduid 수집
+        # 카테고리 내 branduid 추출
         branduids = []
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
@@ -386,7 +382,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
 
         for buid in branduids[:25]:
             try:
-                # 1. 모바일 상세 페이지에서 L-품절 여부 정밀 확인
+                # 1. 모바일 페이지에서 L-품절 여부 1차 체크 (속도 최적화)
                 m_url = f"https://zavanas.com/m/product.html?branduid={buid}"
                 m_res = requests.get(m_url, headers=mobile_headers, timeout=5)
                 try:
@@ -395,45 +391,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
                     m_html = html.unescape(m_res.content.decode('utf-8', 'ignore'))
 
                 m_soup = BeautifulSoup(m_html, "html.parser")
-                pc_url = f"https://zavanas.com/shop/shopdetail.html?branduid={buid}"
 
-                # --- 상품명 추출 ---
-                prod_name = ""
-                og_title = m_soup.select_one('meta[property="og:title"]')
-                if og_title and og_title.get("content"):
-                    prod_name = og_title["content"].strip()
-
-                if not prod_name:
-                    title_tag = m_soup.select_one('title')
-                    if title_tag and title_tag.text:
-                        raw_title = title_tag.text.strip()
-                        clean_title = re.sub(r'[\-\|\:]\s*자바나스.*$', '', raw_title, flags=re.IGNORECASE).strip()
-                        clean_title = re.sub(r'^자바나스\(zavanas\).*?-\s*', '', clean_title, flags=re.IGNORECASE).strip()
-                        if clean_title and "공식 온라인 스토어" not in clean_title and "since 2009" not in clean_title:
-                            prod_name = clean_title
-
-                if not prod_name or prod_name == "자바나스":
-                    prod_name = f"자바나스 상품 ({buid})"
-
-                # --- 이미지 URL ---
-                img_tag = m_soup.select_one('meta[property="og:image"]')
-                img_url = img_tag.get("content", "") if img_tag else ""
-                
-                # --- 가격 ---
-                price = "가격 확인"
-                price_meta = m_soup.select_one('meta[property="product:price:amount"]')
-                if price_meta and price_meta.get("content"):
-                    try:
-                        price = f"{int(price_meta['content']):,}원"
-                    except Exception:
-                        price = price_meta.get("content")
-
-                if price == "가격 확인" or price == "0원":
-                    m_price = re.search(r'([\d,]+)\s*원', m_html)
-                    if m_price:
-                        price = f"{m_price.group(1)}원"
-
-                # --- L사이즈 및 품절 여부 검사 ---
                 has_valid_l_stock = False
                 l_options_found = []
 
@@ -445,7 +403,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
                     if not opt_text or "선택" in opt_text or opt_val in ["0", "none", ""]:
                         continue
 
-                    # L / LARGE / 100 단독 사이즈 매칭 (XL, XXL 오인 차단)
+                    # L / LARGE / 100 단독 사이즈 매칭 (XL, XXL 제외)
                     is_l = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
 
                     if is_l:
@@ -463,7 +421,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
                             has_valid_l_stock = True
                             l_options_found.append(opt_text)
 
-                # --- 원문 HTML 강제 2차 검증 (Fail-Safe) ---
+                # 2차 강제 차단 (HTML 원문 스캔)
                 soldout_patterns = [
                     r'(?<![A-Z0-9])(?:L|LARGE|100)\s*[\-\:\(\[\_\s]*품\s*절',
                     r'품\s*절\s*[\-\:\(\[\_\s]*(?<![A-Z0-9])(?:L|LARGE|100)(?![A-Z0-9])'
@@ -474,14 +432,90 @@ def fetch_zabanus_l_stock(category_name, category_url):
                         l_options_found = []
                         break
 
-                if has_valid_l_stock and l_options_found:
-                    available_items.append({
-                        "name": prod_name,
-                        "price": price,
-                        "image": img_url,
-                        "url": pc_url,
-                        "available_options": ", ".join(l_options_found)
-                    })
+                # L사이즈 재고가 없으면 다음 상품으로 진행
+                if not has_valid_l_stock or not l_options_found:
+                    continue
+
+                # 2. L사이즈 재고 확인된 상품만 PC 상세 페이지에서 정보(상품명, 이미지, 가격) 교체 파싱
+                pc_url = f"https://zavanas.com/shop/shopdetail.html?branduid={buid}"
+                pc_res = requests.get(pc_url, headers=pc_headers, timeout=5)
+                try:
+                    pc_html = html.unescape(pc_res.content.decode('cp949', 'ignore'))
+                except Exception:
+                    pc_html = html.unescape(pc_res.content.decode('utf-8', 'ignore'))
+
+                pc_soup = BeautifulSoup(pc_html, "html.parser")
+
+                # --- 상품명 정밀 파싱 ---
+                prod_name = ""
+                # PC 타이틀 태그 우선
+                pc_title = pc_soup.select_one('title')
+                if pc_title and pc_title.text:
+                    t = pc_title.text.strip()
+                    t = re.sub(r'자바나스\(zavanas\)\s*since\s*2009\s*-\s*공식\s*온라인\s*스토어', '', t, flags=re.IGNORECASE)
+                    t = re.sub(r'[\-\|\:]\s*자바나스.*$', '', t, flags=re.IGNORECASE).strip()
+                    if t and len(t) > 2:
+                        prod_name = t
+
+                if not prod_name:
+                    for sel in ['.detail_title', '.prd-name', '.item_title', '.goods_name', 'h2.tit', 'h3.tit', '#detail_info_title', '.product_name']:
+                        tag = pc_soup.select_one(sel)
+                        if tag and tag.text.strip():
+                            t = tag.text.strip()
+                            if "공식 온라인 스토어" not in t and "since 2009" not in t:
+                                prod_name = t
+                                break
+
+                if not prod_name:
+                    prod_name = f"자바나스 인기 상품 ({buid})"
+
+                # --- 이미지 URL 정밀 파싱 ---
+                img_url = ""
+                og_img = pc_soup.select_one('meta[property="og:image"]')
+                if og_img and og_img.get("content"):
+                    c = og_img["content"]
+                    if "logo" not in c.lower() and "banner" not in c.lower():
+                        img_url = c if c.startswith('http') else f"https://zavanas.com{c}"
+
+                if not img_url:
+                    for img in pc_soup.select('#main_img, .detail_image img, .prd-thumb img, img[src*="/shopimages/"]'):
+                        src = img.get('src', '')
+                        if src and 'logo' not in src.lower():
+                            img_url = src if src.startswith('http') else f"https://zavanas.com{src}"
+                            break
+
+                # --- 가격 정밀 파싱 ---
+                price = "가격 확인"
+                price_meta = pc_soup.select_one('meta[property="product:price:amount"]')
+                if price_meta and price_meta.get("content") and price_meta["content"].isdigit():
+                    p_val = int(price_meta["content"])
+                    if p_val > 0:
+                        price = f"{p_val:,}원"
+
+                if price == "가격 확인":
+                    # 메이크샵 가격 전용 태그 파싱
+                    price_elem = pc_soup.select_one('.price_info, .price, .mk_price, #price, .price_val, .sale_price')
+                    if price_elem:
+                        m_p = re.search(r'([\d,]+)\s*원', price_elem.text)
+                        if m_p:
+                            p_val = int(m_p.group(1).replace(',', ''))
+                            if 5000 <= p_val <= 500000:  # 의류 가격 정상 범위
+                                price = f"{p_val:,}원"
+
+                if price == "가격 확인":
+                    m_js = re.search(r'(?:price_info|sell_price|price)\s*=\s*[\'"]?([\d,]+)', pc_html)
+                    if m_js:
+                        p_val = int(m_js.group(1).replace(',', ''))
+                        if 5000 <= p_val <= 500000:
+                            price = f"{p_val:,}원"
+
+                available_items.append({
+                    "name": prod_name,
+                    "price": price,
+                    "image": img_url,
+                    "url": pc_url,
+                    "available_options": ", ".join(l_options_found)
+                })
             except Exception:
                 continue
 
