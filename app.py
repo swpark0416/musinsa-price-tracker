@@ -257,7 +257,18 @@ with tab1:
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
                 
-                # 1. 판매가 변동 추이 (원화 정수 단위, 깔끔한 그리드 정렬)
+                min_p = int(product_logs["price"].min())
+                max_p = int(product_logs["price"].max())
+
+                # Y축 범위 계산: 가격 변동이 없으면 상하 3,000원씩 여백 생성
+                if min_p == max_p:
+                    y_min = max(0, min_p - 3000)
+                    y_max = max_p + 3000
+                else:
+                    y_min = max(0, min_p - 2000)
+                    y_max = max_p + 2000
+
+                # 1. 판매가 변동 추이 (1,000원 단위 간격)
                 fig_price = px.line(
                     product_logs, 
                     x="created_at", 
@@ -271,9 +282,10 @@ with tab1:
                     tickformat="%Y-%m-%d"        # YYYY-MM-DD 날짜 포맷
                 )
                 fig_price.update_yaxes(
-                    tickformat=",d",             # 천 단위 콤마(,) 및 정수 표기 (예: 68,400)
-                    ticksuffix="원",              # 숫자 뒤 '원' 붙이기
-                    nticks=6                     # 깔끔하게 떨어지는 5~6개 수평 그리드 눈금 자동 정렬
+                    dtick=1000,                  # 🌟 눈금 간격 1,000원 단위 고정
+                    range=[y_min, y_max],        # Y축 최소/최대 범위 고정
+                    tickformat=",d",             # 천 단위 콤마(,) 및 정수 표기
+                    ticksuffix="원"              # 숫자 뒤 '원' 붙이기
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
 
