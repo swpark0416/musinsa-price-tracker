@@ -20,13 +20,25 @@ except Exception as e:
     st.stop()
 
 # ---------------------------------------------------------
+# 안전한 이미지 출력 헬퍼 함수
+# ---------------------------------------------------------
+def render_image(image_url, **kwargs):
+    """이미지 URL 유효성을 검사하여 에러 없이 안전하게 출력합니다."""
+    if image_url and isinstance(image_url, str) and image_url.startswith("http"):
+        try:
+            st.image(image_url, **kwargs)
+            return
+        except Exception:
+            pass
+    st.caption("🖼️ 이미지 없음")
+
+# ---------------------------------------------------------
 # 무신사 크롤링 및 데이터 추출 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
-    """모바일 앱 공유 링크(onelink.me), 단축 URL, 일반 웹주소에서 진짜 상품 ID(6~8자리)를 추출합니다."""
+    """공유 링크, 단축 URL, 일반 웹주소에서 진짜 상품 ID를 추출합니다."""
     text = url_or_id.strip()
     
-    # 1. URL인 경우 실제 웹페이지 주소로 끝까지 추적 (onelink.me 리다이렉트 처리)
     if text.startswith("http"):
         headers = {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0"
@@ -41,17 +53,14 @@ def parse_goods_id(url_or_id):
         except Exception:
             pass
 
-    # 2. /goods/숫자 또는 /products/숫자 패턴 추출
     match = re.search(r'(?:goods|products)/(\d+)', text)
     if match:
         return match.group(1)
 
-    # 3. 무신사 상품 ID 스펙인 5~8자리 연속 숫자 추출
     digits = re.findall(r'\b\d{5,8}\b', text)
     if digits:
         return digits[0]
 
-    # 4. 예외 케이스: 4자리 이상 가장 긴 숫자열
     all_digits = re.findall(r'\d+', text)
     if all_digits:
         longest = max(all_digits, key=len)
@@ -61,10 +70,7 @@ def parse_goods_id(url_or_id):
     return None
 
 def get_musinsa_goods_info(goods_id):
-    """
-    무신사 상품 정보를 수집합니다.
-    JSON API 및 HTML 본문 정규식 파싱을 순차적으로 시도하여 수집합니다.
-    """
+    """무신사 상품 정보를 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -217,15 +223,14 @@ with tab1:
             st.warning("해당 카테고리에 등록된 상품이 없습니다.")
         else:
             with col_f2:
-                selected_goods_name = st.selectbox("🛍️ 조회할 상품 선택", filtered_products["goods_name"].unique())
+                selected_goods_name = st.selectbox("🛍️️ 조회할 상품 선택", filtered_products["goods_name"].unique())
 
             product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
             g_id = product_info["goods_id"]
 
             card_col1, card_col2 = st.columns([1, 3])
             with card_col1:
-                if product_info["image_url"]:
-                    st.image(product_info["image_url"], use_container_width=True)
+                render_image(product_info.get("image_url"), use_container_width=True)
             with card_col2:
                 st.subheader(product_info["goods_name"])
                 st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
@@ -317,8 +322,7 @@ with tab2:
         for idx, row in tracked_df.iterrows():
             col_img, col_desc, col_del = st.columns([1, 4, 1])
             with col_img:
-                if row["image_url"]:
-                    st.image(row["image_url"], width=80)
+                render_image(row.get("image_url"), width=80)
             with col_desc:
                 st.markdown(f"**{row['goods_name']}** (ID: `{row['goods_id']}`)")
                 st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
@@ -351,8 +355,7 @@ with tab3:
                         st.success("🎉 실시간 조회 성공!")
                         tc1, tc2 = st.columns([1, 3])
                         with tc1:
-                            if live["image_url"]:
-                                st.image(live["image_url"], use_container_width=True)
+                            render_image(live.get("image_url"), use_container_width=True)
                         with tc2:
                             st.write(f"**상품명:** {live['goods_name']}")
                             st.write(f"**카테고리:** {live['category']}")
