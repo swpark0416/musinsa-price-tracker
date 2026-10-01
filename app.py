@@ -11,8 +11,10 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 2열 카드 그리드 강제 유지 & 모바일 터치 최적화 CSS
+# 이미지 차단 방지 메타 태그 & 모바일 2열 레이아웃 CSS
 # ---------------------------------------------------------
+st.markdown('<meta name="referrer" content="no-referrer">', unsafe_allow_html=True)
+
 st.markdown("""
 <style>
 /* 모바일 화면 2열 카드 그리드 레이아웃 오버라이드 */
@@ -33,26 +35,26 @@ st.markdown("""
     }
 }
 
-/* 스마트폰 여백 및 스크롤 패딩 압축 */
+/* 스마트폰 여백 및 스크롤 패딩 최적화 */
 .main .block-container {
-    padding-left: 0.2rem !important;
-    padding-right: 0.2rem !important;
+    padding-left: 0.3rem !important;
+    padding-right: 0.3rem !important;
     padding-top: 0.8rem !important;
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
 
-/* 카드 내부 요소 간격 슬림화 */
+/* 카드 내부 요소 간격 보정 (텍스트 겹침 방지) */
 div[data-testid="stVerticalBlock"] {
-    gap: 2px !important;
+    gap: 4px !important;
 }
 
 /* 버튼/팝오버 컴팩트 스타일 */
 .stButton > button, div[data-testid="stPopover"] > button {
     font-size: 11px !important;
     padding: 2px 4px !important;
-    height: 26px !important;
-    min-height: 26px !important;
+    height: 28px !important;
+    min-height: 28px !important;
     line-height: 1.2 !important;
 }
 
@@ -75,7 +77,7 @@ except Exception as e:
     st.stop()
 
 # ---------------------------------------------------------
-# 무신사 이미지 차단 우회(no-referrer) 정밀 출력 함수
+# 무신사 이미지 차단 우회(no-referrer) 렌더링 함수
 # ---------------------------------------------------------
 def render_image(image_url, height=130, **kwargs):
     """이미지 URL 유효성을 검사하여 무신사 이미지 차단을 우회하여 렌더링합니다."""
@@ -86,7 +88,7 @@ def render_image(image_url, height=130, **kwargs):
         if url.startswith("http"):
             st.markdown(
                 f'<div style="text-align:center; width:100%; border-radius:6px; overflow:hidden; background:#f4f4f4; margin-bottom:4px;">'
-                f'<img src="{url}" referrerpolicy="no-referrer" style="width:100%; height:{height}px; object-fit:cover; display:block;" />'
+                f'<img src="{url}" referrerpolicy="no-referrer" rel="noreferrer" style="width:100%; height:{height}px; object-fit:cover; display:block;" />'
                 f'</div>',
                 unsafe_allow_html=True
             )
@@ -282,7 +284,7 @@ def get_musinsa_goods_info(goods_id):
 
     return None
 
-# DB 데이터 렌더링 헬퍼 (누락 이미지 자동 수복 포함)
+# DB 데이터 렌더링 헬퍼 (깨진 이미지 자동 수복 포함)
 def load_tracked_products():
     res = supabase.table("tracked_products").select("*").order("created_at", desc=True).execute()
     df = pd.DataFrame(res.data)
@@ -464,7 +466,6 @@ with main_tab1:
                         product_logs, 
                         x="date_str", 
                         y="price", 
-                        title="판매가 변동 추이", 
                         markers=True,
                         labels={"date_str": "날짜", "price": "판매가(원)"}
                     )
@@ -478,6 +479,7 @@ with main_tab1:
                         tickformat=",d", 
                         ticksuffix="원"
                     )
+                    fig_price.update_layout(margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_price, use_container_width=True)
 
                     min_d = product_logs["discount_rate"].min()
@@ -492,7 +494,6 @@ with main_tab1:
                         product_logs, 
                         x="date_str", 
                         y="discount_rate", 
-                        title="할인율 변동 추이 (%)", 
                         markers=True,
                         labels={"date_str": "날짜", "discount_rate": "할인율 (%)"}
                     )
@@ -502,12 +503,13 @@ with main_tab1:
                     )
                     fig_discount.update_xaxes(type='category')
                     fig_discount.update_yaxes(dtick=5, range=[d_min, d_max], ticksuffix="%")
+                    fig_discount.update_layout(margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_discount, use_container_width=True)
                 else:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 2열 고정 카드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 2열 정밀 카드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -604,7 +606,7 @@ with main_tab1:
                                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
                                     if brand:
                                         st.caption(f"**{brand}**")
-                                    st.markdown(f"<div style='font-size:12px; font-weight:bold; line-height:1.2; height:28px; overflow:hidden;'>{row['goods_name']}</div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='font-size:12px; font-weight:bold; line-height:1.2; min-height:28px; margin-bottom:4px;'>{row['goods_name']}</div>", unsafe_allow_html=True)
 
                                     # 3. 가격
                                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
@@ -615,14 +617,14 @@ with main_tab1:
                                         disc = latest_p.get('discount_rate', 0)
 
                                         if n_price > c_price and disc > 0:
-                                            st.markdown(f"<div style='margin-top:2px;'><span style='color:#d9480f; font-weight:bold; font-size:12px;'>{disc}%</span> <b style='font-size:13px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='margin-bottom:4px;'><span style='color:#d9480f; font-weight:bold; font-size:12px;'>{disc}%</span> <b style='font-size:13px; margin-left:2px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
                                         else:
-                                            st.markdown(f"<div style='margin-top:2px;'><b style='font-size:13px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='margin-bottom:4px;'><b style='font-size:13px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
                                     else:
                                         st.caption("가격 수집 중")
 
                                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "-"
-                                    st.caption(f"🏷️ `{curr_tag}`")
+                                    st.markdown(f"<div style='font-size:11px; color:#495057; margin-bottom:6px;'>🏷️ {curr_tag}</div>", unsafe_allow_html=True)
 
                                     btn_c1, btn_c2 = st.columns(2)
                                     with btn_c1:
@@ -727,13 +729,14 @@ with main_tab2:
                         t_max = int(tag_logs["price"].max())
                         t_pad = max(5000, int((t_max - t_min) * 0.2)) if t_max != t_min else 10000
 
+                        st.markdown(f"#### 📈 {selected_tag} 태그 상품 가격 비교 추이")
+
                         fig_tag = px.line(
                             tag_logs,
                             x="date_str",
                             y="price",
                             color="display_name",
                             markers=True,
-                            title=f"📈 {selected_tag} 태그 상품 가격 비교 추이",
                             labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
                         )
                         fig_tag.update_traces(
@@ -747,7 +750,15 @@ with main_tab2:
                             ticksuffix="원"
                         )
                         fig_tag.update_layout(
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            legend=dict(
+                                orientation="h",
+                                yanchor="top",
+                                y=-0.25,
+                                xanchor="left",
+                                x=0,
+                                font=dict(size=11)
+                            )
                         )
                         st.plotly_chart(fig_tag, use_container_width=True)
 
