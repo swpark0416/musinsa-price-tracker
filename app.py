@@ -11,61 +11,20 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 3열 전용 스마트 CSS (화면 잘림 & 글자 겹침 완전 방지)
+# 모바일 패딩 및 여백 최적화 CSS
 # ---------------------------------------------------------
 st.markdown("""
 <style>
 /* 여백 및 패딩 최소화 */
 .main .block-container {
-    padding-left: 4px !important;
-    padding-right: 4px !important;
-    padding-top: 8px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+    padding-top: 10px !important;
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
 
-/* 가로 블록(컬럼 그룹) 강제 100% 유연 배치 */
-div[data-testid="stHorizontalBlock"] {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    gap: 3px !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-}
-
-/* 컬럼 최소 너비 해제 (33.3% 자동 축소) */
-div[data-testid="column"] {
-    flex: 1 1 0% !important;
-    min-width: 0 !important;
-    box-sizing: border-box !important;
-    padding: 0 !important;
-}
-
-/* 카드 테두리 컨테이너 내부 여백 축소 */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 4px 4px !important;
-    margin: 0 !important;
-    border-radius: 6px !important;
-}
-
-/* 카드 내부 요소 간격 보정 */
-div[data-testid="stVerticalBlock"] {
-    gap: 2px !important;
-}
-
-/* 초슬림 버튼 및 팝오버 스타일 */
-.stButton > button, div[data-testid="stPopover"] > button {
-    font-size: 10px !important;
-    padding: 1px 2px !important;
-    height: 22px !important;
-    min-height: 22px !important;
-    line-height: 1 !important;
-    border-radius: 4px !important;
-    width: 100% !important;
-}
-
+/* 글로벌 폰트 및 줄바꿈 보정 */
 p, span, div, h1, h2, h3, h4 {
     word-break: break-all !important;
     overflow-wrap: break-word !important;
@@ -451,7 +410,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 퍼펙트 카드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (순수 HTML 3열 고정 그리드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -532,68 +491,89 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
-                items_list = list(filtered_tracked.iterrows())
-                for i in range(0, len(items_list), 3):
-                    cols = st.columns(3)
-                    for j in range(3):
-                        if i + j < len(items_list):
-                            _, row = items_list[i + j]
-                            with cols[j]:
-                                with st.container(border=True):
-                                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
-                                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
+                # -------------------------------------------------
+                # 순수 HTML/CSS 3열 그리드 (모바일 세로꺾임 & 잘림 100% 방지)
+                # -------------------------------------------------
+                grid_html = '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%; box-sizing: border-box; margin-bottom: 15px;">'
 
-                                    p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
-                                    
-                                    price_html_str = "수집중"
-                                    if not p_logs.empty:
-                                        latest_p = p_logs.iloc[-1]
-                                        c_price = int(latest_p['price'])
-                                        n_price = int(latest_p['normal_price'])
-                                        disc = latest_p.get('discount_rate', 0)
+                for _, row in filtered_tracked.iterrows():
+                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
+                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
 
-                                        if n_price > c_price and disc > 0:
-                                            price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
-                                        else:
-                                            price_html_str = f"{c_price:,}원"
+                    p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
+                    
+                    price_html_str = "수집중"
+                    if not p_logs.empty:
+                        latest_p = p_logs.iloc[-1]
+                        c_price = int(latest_p['price'])
+                        n_price = int(latest_p['normal_price'])
+                        disc = latest_p.get('discount_rate', 0)
 
-                                    card_html = f"""
-                                    <div style="width: 100%; box-sizing: border-box; overflow: hidden; padding: 1px 0;">
-                                        <div style="font-size: 9px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                            {brand}
-                                        </div>
-                                        <div style="font-size: 10px; font-weight: bold; color: #212529; line-height: 1.2; height: 24px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0;">
-                                            {row['goods_name']}
-                                        </div>
-                                        <div style="font-size: 10px; font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                            {price_html_str}
-                                        </div>
-                                        <div style="font-size: 9px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 0px 3px; border-radius: 3px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
-                                            🏷️ {curr_tag}
-                                        </div>
-                                    </div>
-                                    """
-                                    st.markdown(card_html, unsafe_allow_html=True)
+                        if n_price > c_price and disc > 0:
+                            price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
+                        else:
+                            price_html_str = f"{c_price:,}원"
 
-                                    with st.popover("⚙️ 관리", use_container_width=True):
-                                        st.caption(f"**[{brand}] {row['goods_name']}**")
-                                        st.divider()
-                                        with st.form(key=f"edit_tag_m_{row['goods_id']}"):
-                                            edit_tag_val = st.text_input(
-                                                "태그 수정", 
-                                                value=row.get("tags") if pd.notna(row.get("tags")) else "", 
-                                                placeholder="예: #상의"
-                                            )
-                                            if st.form_submit_button("저장", use_container_width=True):
-                                                supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
-                                                st.toast("✅ 태그가 수정되었습니다!", icon="🎉")
-                                                time.sleep(0.3)
-                                                st.rerun()
-                                        
-                                        if st.button("🗑️ 상품 삭제", key=f"del_m_{row['goods_id']}", use_container_width=True):
-                                            supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
-                                            st.success("삭제되었습니다.")
-                                            st.rerun()
+                    grid_html += f"""
+                    <div style="background: #ffffff; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="font-size: 9px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                {brand}
+                            </div>
+                            <div style="font-size: 10px; font-weight: bold; color: #212529; line-height: 1.25; height: 25px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 4px 0;">
+                                {row['goods_name']}
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-size: 10px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px;">
+                                {price_html_str}
+                            </div>
+                            <div style="font-size: 9px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 1px 4px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
+                                🏷️ {curr_tag}
+                            </div>
+                        </div>
+                    </div>
+                    """
+
+                grid_html += '</div>'
+                st.markdown(grid_html, unsafe_allow_html=True)
+
+                # -------------------------------------------------
+                # 하단 전용 상품 관리 패널 (태그 수정 및 삭제)
+                # -------------------------------------------------
+                st.markdown("#### ⚙️ 상품 관리 (태그 수정 / 삭제)")
+                
+                manage_options = {
+                    f"[{r.get('brand_name', '무신사')}] {r['goods_name']}": r
+                    for _, r in filtered_tracked.iterrows()
+                }
+
+                selected_label = st.selectbox("관리할 상품 선택", list(manage_options.keys()), key="manage_prod_select")
+                selected_prod = manage_options[selected_label]
+
+                col_m1, col_m2 = st.columns([2, 1])
+
+                with col_m1:
+                    with st.form(key=f"manage_tag_form_{selected_prod['goods_id']}"):
+                        new_tag_val = st.text_input(
+                            "태그 수정", 
+                            value=selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else "", 
+                            placeholder="예: #상의, #봄아우터"
+                        )
+                        if st.form_submit_button("🏷️ 태그 저장", use_container_width=True):
+                            supabase.table("tracked_products").update({"tags": new_tag_val}).eq("goods_id", selected_prod["goods_id"]).execute()
+                            st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
+                            time.sleep(0.3)
+                            st.rerun()
+
+                with col_m2:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑️ 추적 삭제", key=f"manage_del_btn_{selected_prod['goods_id']}", use_container_width=True):
+                        supabase.table("tracked_products").delete().eq("goods_id", selected_prod["goods_id"]).execute()
+                        st.success("삭제되었습니다.")
+                        time.sleep(0.3)
+                        st.rerun()
 
     # -----------------------------------------------------
     # SUB TAB 3: 무신사 실시간 조회
