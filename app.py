@@ -33,7 +33,7 @@ def render_image(image_url, **kwargs):
     st.caption("🖼️ 이미지 없음")
 
 # ---------------------------------------------------------
-# 무신사 크롤링 및 데이터 추출 함수
+# 무신사 크롤링 및 브랜드 정밀 추출 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
     """공유 링크, 단축 URL, 일반 웹주소에서 진짜 상품 ID를 추출합니다."""
@@ -69,8 +69,41 @@ def parse_goods_id(url_or_id):
 
     return None
 
+def extract_brand_name(raw_text, data=None):
+    """JSON 및 HTML 구조 전체를 탐색하여 실제 브랜드명(예: 드로우핏)을 정밀 추출합니다."""
+    if data and isinstance(data, dict):
+        b_info = data.get("brand") or data.get("brandInfo") or data.get("brandSub")
+        if isinstance(b_info, dict):
+            bn = b_info.get("brandName") or b_info.get("brandNm") or b_info.get("brandNameKo") or b_info.get("name")
+            if bn and bn.upper() != "MUSINSA":
+                return bn
+        elif isinstance(b_info, str) and b_info.upper() != "MUSINSA":
+            return b_info
+
+        bn = data.get("brandName") or data.get("brandNm") or data.get("brandNameKo") or data.get("brandEng")
+        if bn and bn.upper() != "MUSINSA":
+            return bn
+
+    # HTML 메타태그 및 본문 정규식 패턴 탐색
+    patterns = [
+        r'"brandName"\s*:\s*"([^"]+)"',
+        r'"brandNm"\s*:\s*"([^"]+)"',
+        r'"brandNameKo"\s*:\s*"([^"]+)"',
+        r'<meta\s+property="product:brand"\s+content="([^"]+)"',
+        r'<meta\s+property="og:brand"\s+content="([^"]+)"',
+        r'\(([^)]+)\)</a',                      # 카테고리 뒤 브랜드명 (예: 니트/스웨터 (드로우핏))
+        r'goods_brand_name"\s*:\s*"([^"]+)"'
+    ]
+    for p in patterns:
+        m = re.search(p, raw_text)
+        if m:
+            val = m.group(1).strip()
+            if val and val.upper() != "MUSINSA":
+                return val
+    return "MUSINSA"
+
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 정확하게 정밀 수집합니다."""
+    """무신사 상품 정보 및 브랜드명을 다중 방식으로 정밀 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -103,17 +136,7 @@ def get_musinsa_goods_info(goods_id):
                             data = data["data"]
 
                         goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
-                        
-                        # 브랜드명 정밀 파싱 (중첩 딕셔너리 대응)
-                        brand_name = ""
-                        brand_info = data.get("brand")
-                        if isinstance(brand_info, dict):
-                            brand_name = brand_info.get("brandName") or brand_info.get("brandNm") or brand_info.get("brandNameKo")
-                        elif isinstance(brand_info, str):
-                            brand_name = brand_info
-                        
-                        if not brand_name:
-                            brand_name = data.get("brandName") or data.get("brandNm") or data.get("brandNameKo") or data.get("brandEng")
+                        brand_name = extract_brand_name(raw_text, data)
 
                         price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
                         normal_price = data.get("normalPrice") or data.get("originalPrice") or price
@@ -134,7 +157,7 @@ def get_musinsa_goods_info(goods_id):
                             return {
                                 "goods_id": str(goods_id),
                                 "goods_name": goods_name,
-                                "brand_name": brand_name or "MUSINSA",
+                                "brand_name": brand_name,
                                 "image_url": image_url,
                                 "category": category,
                                 "normal_price": normal_price,
@@ -150,12 +173,6 @@ def get_musinsa_goods_info(goods_id):
                     re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
                     re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
                     re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
-                )
-                brand_match = (
-                    re.search(r'"brandName"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'"brandNm"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'"brandNameKo"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'<meta\s+property="product:brand"\s+content="([^"]+)"', raw_text)
                 )
                 price_match = (
                     re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
@@ -174,7 +191,7 @@ def get_musinsa_goods_info(goods_id):
 
                 if name_match and price_match:
                     goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
-                    brand_name = brand_match.group(1) if brand_match else "MUSINSA"
+                    brand_name = extract_brand_name(raw_text)
                     price = int(price_match.group(1))
                     normal_price = int(normal_price_match.group(1)) if normal_price_match else price
                     image_url = image_match.group(1) if image_match else ""
@@ -214,9 +231,6 @@ def load_price_logs():
         df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
         df = df.dropna(subset=["created_at"])
         
-        # Y축용 만원 단위 변환
-        df["price_10k"] = (df["price"] / 10000.0).round(2)
-        
         df["discount_rate"] = df.apply(
             lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
             if r["normal_price"] > r["price"] else 0, axis=1
@@ -249,7 +263,7 @@ with tab1:
             st.warning("해당 카테고리에 등록된 상품이 없습니다.")
         else:
             with col_f2:
-                selected_goods_name = st.selectbox("🛍️ 조회할 상품 선택", filtered_products["goods_name"].unique())
+                selected_goods_name = st.selectbox("🛍️️ 조회할 상품 선택", filtered_products["goods_name"].unique())
 
             product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
             g_id = product_info["goods_id"]
@@ -290,33 +304,40 @@ with tab1:
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
                 
-                # Y축 만원 단위 범위 설정
-                min_p_10k = product_logs["price_10k"].min()
-                max_p_10k = product_logs["price_10k"].max()
+                # 1. 판매가 변동 추이 (그리드: 만원 단위 정수, 툴팁: 원화 정수)
+                min_p = int(product_logs["price"].min())
+                max_p = int(product_logs["price"].max())
 
-                if min_p_10k == max_p_10k:
-                    y_min = max(0, min_p_10k - 0.3)
-                    y_max = max_p_10k + 0.3
-                else:
-                    y_min = max(0, min_p_10k - 0.2)
-                    y_max = max_p_10k + 0.2
+                y_min = max(0, (min_p // 10000) * 10000 - 10000)
+                y_max = ((max_p // 10000) + 1) * 10000 + 10000
 
-                # 1. 판매가 변동 추이 (단순 판매가 전용, 만원 단위)
+                if y_min >= y_max:
+                    y_min = max(0, (min_p // 10000) * 10000)
+                    y_max = y_min + 20000
+
+                tick_vals = list(range(y_min, y_max + 1, 10000))
+                tick_texts = [f"{v // 10000}만원" if v > 0 else "0원" for v in tick_vals]
+
                 fig_price = px.line(
                     product_logs, 
                     x="created_at", 
-                    y="price_10k", 
-                    title="판매가 변동 추이 (단위: 만원)", 
+                    y="price", 
+                    title="판매가 변동 추이", 
                     markers=True,
-                    labels={"created_at": "날짜", "price_10k": "판매가 (만원)"}
+                    labels={"created_at": "날짜", "price": "판매가"}
+                )
+                fig_price.update_traces(
+                    hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>판매가:</b> %{y:,}원<extra></extra>"
                 )
                 fig_price.update_xaxes(
                     dtick="D1",
                     tickformat="%Y-%m-%d"
                 )
                 fig_price.update_yaxes(
-                    range=[y_min, y_max],
-                    ticksuffix="만원"
+                    tickmode="array",
+                    tickvals=tick_vals,
+                    ticktext=tick_texts,
+                    range=[y_min, y_max]
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
 
@@ -326,6 +347,8 @@ with tab1:
 
                 d_min = max(0, (int(min_d) // 5) * 5 - 5)
                 d_max = min(100, ((int(max_d) // 5) + 1) * 5 + 5)
+                if d_min >= d_max:
+                    d_max = d_min + 10
 
                 fig_discount = px.line(
                     product_logs, 
@@ -335,13 +358,16 @@ with tab1:
                     markers=True,
                     labels={"created_at": "날짜", "discount_rate": "할인율 (%)"}
                 )
+                fig_discount.update_traces(
+                    hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>할인율:</b> %{y}%<extra></extra>"
+                )
                 fig_discount.update_xaxes(
                     dtick="D1",
                     tickformat="%Y-%m-%d"
                 )
                 fig_discount.update_yaxes(
-                    dtick=5,                    # 🌟 5% 눈금 간격 고정
-                    range=[d_min, d_max],       # 🌟 5% 단위 범위 적용
+                    dtick=5,
+                    range=[d_min, d_max],
                     ticksuffix="%"
                 )
                 st.plotly_chart(fig_discount, use_container_width=True)
