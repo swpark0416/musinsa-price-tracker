@@ -274,18 +274,47 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스 재고 크롤링 함수 (30분 캐싱)
+# 자바나스(MakeShop) 자동 카테고리 수집 및 L사이즈 재고 파싱
 # ---------------------------------------------------------
-ZABANUS_CATEGORIES = {
-    "티셔츠/탑": "https://www.zabanus.com/category/top/24/",
-    "니트/가디건": "https://www.zabanus.com/category/knit/25/",
-    "아우터": "https://www.zabanus.com/category/outer/26/",
-    "팬츠": "https://www.zabanus.com/category/pants/27/"
-}
+@st.cache_data(ttl=86400)
+def get_zavanas_categories():
+    """자바나스 사이트에 실제 존재하는 모든 xcode(카테고리 번호)와 이름을 동적으로 수집합니다."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15"
+    }
+    categories = {}
+    try:
+        res = requests.get("https://zavanas.com", headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        for a_tag in soup.select('a[href*="shopbrand.html"]'):
+            href = a_tag.get('href', '')
+            name = a_tag.text.strip()
+            
+            match = re.search(r'xcode=(\d+)', href)
+            if match and name:
+                xcode_num = match.group(1)
+                clean_name = re.sub(r'[\r\n\t]', '', name).strip()
+                
+                ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY"]
+                if len(clean_name) > 1 and not any(w in clean_name.upper() for w in ignore_words):
+                    dict_key = f"[{xcode_num}] {clean_name}"
+                    if dict_key not in categories:
+                        categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
+    except Exception:
+        pass
+
+    if not categories:
+        categories = {
+            "[001] 특가/원단 라인업": "https://zavanas.com/shop/shopbrand.html?xcode=001",
+            "[002] 티셔츠": "https://zavanas.com/shop/shopbrand.html?xcode=002"
+        }
+        
+    return categories
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """자바나스 카테고리 페이지를 순회하며 L사이즈가 남아있는 상품을 파싱합니다."""
+    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -297,28 +326,30 @@ def fetch_zabanus_l_stock(category_name, category_url):
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
-        products = soup.select(".prdList > li, .xans-product-listnormal > ul > li")
+        
+        product_links = []
+        for a_tag in soup.select('a[href*="shopdetail.html"]'):
+            href = a_tag.get('href', '')
+            if "branduid=" in href:
+                full_url = "https://zavanas.com" + href if href.startswith("/") else href
+                if full_url not in product_links:
+                    product_links.append(full_url)
 
-        for prod in products:
-            link_tag = prod.select_one(".name a, .description .name a")
-            if not link_tag or 'href' not in link_tag.attrs:
-                continue
-
-            prod_name = link_tag.text.strip()
-            prod_link = "https://www.zabanus.com" + link_tag['href'] if link_tag['href'].startswith("/") else link_tag['href']
-            
-            img_tag = prod.select_one(".thumbnail img, .prdImg img")
-            img_url = "https:" + img_tag['src'] if img_tag and img_tag.get('src', '').startswith("//") else (img_tag.get('src') if img_tag else "")
-
-            price_tag = prod.select_one(".description ul li:nth-child(2) span, .price")
-            price = price_tag.text.strip() if price_tag else "가격 확인 필요"
-
+        for prod_link in product_links[:15]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
                 
-                options = detail_soup.select("select.ProductOption0 option, select[option_title] option")
+                name_tag = detail_soup.select_one('meta[property="og:title"], h2, .prd-name, .title')
+                prod_name = name_tag.get("content", "").strip() if name_tag and name_tag.get("content") else (name_tag.text.strip() if name_tag else "자바나스 상품")
                 
+                img_tag = detail_soup.select_one('meta[property="og:image"]')
+                img_url = img_tag.get("content", "") if img_tag else ""
+                
+                price_tag = detail_soup.select_one('.price, .mk_price, #price')
+                price = price_tag.text.strip() if price_tag else "가격 확인"
+
+                options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
 
@@ -546,7 +577,7 @@ with tab2:
                 st.markdown(f"{title_str} (ID: `{row['goods_id']}`)")
                 st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
             with col_del:
-                if st.button("🗑️️ 삭제", key=f"del_{row['goods_id']}"):
+                if st.button("🗑 삭제", key=f"del_{row['goods_id']}"):
                     supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
                     st.success("삭제되었습니다.")
                     st.rerun()
@@ -591,24 +622,27 @@ with tab3:
 # =========================================================
 with tab4:
     st.subheader("👕 자바나스(ZABANUS) L사이즈 잔여 재고 현황")
-    st.caption("현재 자바나스 공식몰에서 **L(또는 Large/100) 사이즈 구매가 가능한 상품만** 카테고리별로 모아봅니다.")
+    st.caption("현재 자바나스 공식몰에서 **L(또는 Large/100) 사이즈 구매가 가능한 상품만** 모아봅니다.")
+
+    # 라이브 사이트에서 카테고리 자동 로드
+    zavanas_cats = get_zavanas_categories()
 
     col_cat, col_btn = st.columns([3, 1])
     with col_cat:
-        selected_cat_name = st.selectbox("📂 카테고리 선택", list(ZABANUS_CATEGORIES.keys()))
+        selected_cat_key = st.selectbox("📂 카테고리 선택 (자동 추출됨)", list(zavanas_cats.keys()))
     with col_btn:
-        st.write(" ") # 레이아웃 정렬용
+        st.write(" ")
         if st.button("🔄 실시간 재고 새로고침"):
             st.cache_data.clear()
             st.rerun()
 
-    cat_url = ZABANUS_CATEGORIES[selected_cat_name]
+    cat_url = zavanas_cats[selected_cat_key]
 
-    with st.spinner(f"'{selected_cat_name}' 카테고리에서 L사이즈 재고 탐색 중..."):
-        l_products = fetch_zabanus_l_stock(selected_cat_name, cat_url)
+    with st.spinner(f"'{selected_cat_key}' 카테고리에서 L사이즈 재고 탐색 중..."):
+        l_products = fetch_zabanus_l_stock(selected_cat_key, cat_url)
 
     if not l_products:
-        st.info(f"현재 **{selected_cat_name}** 카테고리에 L사이즈 재고가 남아있는 상품이 없거나 수집 중입니다.")
+        st.info(f"현재 **{selected_cat_key}** 카테고리에 L사이즈 재고가 남아있는 상품이 없거나 수집 중입니다.")
     else:
         st.success(f"총 **{len(l_products)}개**의 상품에서 L사이즈 구매가 가능합니다!")
         
