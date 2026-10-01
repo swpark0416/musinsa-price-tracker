@@ -11,62 +11,58 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 브라우저 전용 3열/2열 강제 고정 정밀 CSS
+# 모바일 3열 전용 스마트 CSS (화면 잘림 & 글자 겹침 완전 방지)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-/* 모바일 기본 여백 및 패딩 최적화 */
+/* 여백 및 패딩 최소화 */
 .main .block-container {
-    padding-left: 0.2rem !important;
-    padding-right: 0.2rem !important;
-    padding-top: 0.6rem !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+    padding-top: 8px !important;
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
 
-/* 모바일 브라우저에서 컬럼 세로 꺾임 무력화 및 가로 고정 */
-@media screen and (max-width: 768px) {
-    div[data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        gap: 4px !important;
-        width: 100% !important;
-    }
-
-    /* 3열 컬럼 모바일 고정 (1줄에 3개씩) */
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-last-child(3):first-child,
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-last-child(3):first-child ~ div[data-testid="column"] {
-        width: calc(33.333% - 3px) !important;
-        flex: 0 0 calc(33.333% - 3px) !important;
-        min-width: calc(33.333% - 3px) !important;
-        max-width: calc(33.333% - 3px) !important;
-        box-sizing: border-box !important;
-    }
-
-    /* 2열 컬럼 모바일 고정 (1줄에 2개씩) */
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-last-child(2):first-child,
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-last-child(2):first-child ~ div[data-testid="column"] {
-        width: calc(50% - 3px) !important;
-        flex: 0 0 calc(50% - 3px) !important;
-        min-width: calc(50% - 3px) !important;
-        max-width: calc(50% - 3px) !important;
-        box-sizing: border-box !important;
-    }
+/* 가로 블록(컬럼 그룹) 강제 100% 유연 배치 */
+div[data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 3px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 
-/* 카드 내부 간격 보정 */
+/* 컬럼 최소 너비 해제 (33.3% 자동 축소) */
+div[data-testid="column"] {
+    flex: 1 1 0% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    padding: 0 !important;
+}
+
+/* 카드 테두리 컨테이너 내부 여백 축소 */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 4px 4px !important;
+    margin: 0 !important;
+    border-radius: 6px !important;
+}
+
+/* 카드 내부 요소 간격 보정 */
 div[data-testid="stVerticalBlock"] {
     gap: 2px !important;
 }
 
-/* 모바일 전용 초슬림 버튼 및 팝오버 스타일 */
+/* 초슬림 버튼 및 팝오버 스타일 */
 .stButton > button, div[data-testid="stPopover"] > button {
     font-size: 10px !important;
     padding: 1px 2px !important;
-    height: 24px !important;
-    min-height: 24px !important;
-    line-height: 1.1 !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    line-height: 1 !important;
+    border-radius: 4px !important;
     width: 100% !important;
 }
 
@@ -77,7 +73,7 @@ p, span, div, h1, h2, h3, h4 {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛍️️ 무신사 스마트 트래커")
+st.title("🛍️ 무신사 스마트 트래커")
 
 # Supabase 연결 설정 (Secrets 사용)
 try:
@@ -455,7 +451,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 3개 고정 카드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 퍼펙트 카드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -549,7 +545,7 @@ with main_tab1:
 
                                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
                                     
-                                    price_html_str = "가격 수집 중"
+                                    price_html_str = "수집중"
                                     if not p_logs.empty:
                                         latest_p = p_logs.iloc[-1]
                                         c_price = int(latest_p['price'])
@@ -561,26 +557,24 @@ with main_tab1:
                                         else:
                                             price_html_str = f"{c_price:,}원"
 
-                                    # 텍스트 오버랩 방지 단일 HTML 블록
                                     card_html = f"""
-                                    <div style="padding: 1px 0;">
-                                        <div style="font-size: 10px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    <div style="width: 100%; box-sizing: border-box; overflow: hidden; padding: 1px 0;">
+                                        <div style="font-size: 9px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                                             {brand}
                                         </div>
-                                        <div style="font-size: 11px; font-weight: bold; color: #212529; line-height: 1.2; height: 26px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 3px 0;">
+                                        <div style="font-size: 10px; font-weight: bold; color: #212529; line-height: 1.2; height: 24px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0;">
                                             {row['goods_name']}
                                         </div>
-                                        <div style="font-size: 11px; font-weight: bold; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                        <div style="font-size: 10px; font-weight: bold; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                                             {price_html_str}
                                         </div>
-                                        <div style="font-size: 10px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 1px 3px; border-radius: 3px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
-                                            🏷️️ {curr_tag}
+                                        <div style="font-size: 9px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 0px 3px; border-radius: 3px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
+                                            🏷️ {curr_tag}
                                         </div>
                                     </div>
                                     """
                                     st.markdown(card_html, unsafe_allow_html=True)
 
-                                    # ⚙️ 관리 팝업 (태그 수정 + 삭제)
                                     with st.popover("⚙️ 관리", use_container_width=True):
                                         st.caption(f"**[{brand}] {row['goods_name']}**")
                                         st.divider()
