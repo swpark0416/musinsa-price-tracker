@@ -274,7 +274,7 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 자동 카테고리 수집 및 L사이즈 재고 파싱
+# 자바나스(MakeShop) 자동 카테고리 수집 및 L사이즈 재고 파싱 (EUC-KR 인코딩 적용)
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
@@ -285,6 +285,7 @@ def get_zavanas_categories():
     categories = {}
     try:
         res = requests.get("https://zavanas.com", headers=headers, timeout=5)
+        res.encoding = 'euc-kr'  # 메이크샵 한글 깨짐 방지
         soup = BeautifulSoup(res.text, "html.parser")
         
         for a_tag in soup.select('a[href*="shopbrand.html"]'):
@@ -322,6 +323,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
     available_items = []
     try:
         res = requests.get(category_url, headers=headers, timeout=8)
+        res.encoding = 'euc-kr'  # 메이크샵 한글 깨짐 방지
         if res.status_code != 200:
             return []
 
@@ -338,17 +340,29 @@ def fetch_zabanus_l_stock(category_name, category_url):
         for prod_link in product_links[:15]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
+                detail_res.encoding = 'euc-kr'  # 상세 페이지 한글 깨짐 방지
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
                 
+                # 상품명 추출
                 name_tag = detail_soup.select_one('meta[property="og:title"], h2, .prd-name, .title')
                 prod_name = name_tag.get("content", "").strip() if name_tag and name_tag.get("content") else (name_tag.text.strip() if name_tag else "자바나스 상품")
                 
+                # 이미지 추출
                 img_tag = detail_soup.select_one('meta[property="og:image"]')
                 img_url = img_tag.get("content", "") if img_tag else ""
                 
-                price_tag = detail_soup.select_one('.price, .mk_price, #price')
-                price = price_tag.text.strip() if price_tag else "가격 확인"
+                # 가격 추출
+                price_meta = detail_soup.select_one('meta[property="product:price:amount"]')
+                if price_meta and price_meta.get("content"):
+                    try:
+                        price = f"{int(price_meta['content']):,}원"
+                    except:
+                        price = price_meta.get("content")
+                else:
+                    price_tag = detail_soup.select_one('.price, .mk_price, #price, .price_val')
+                    price = price_tag.text.strip() if price_tag else "가격 확인"
 
+                # 옵션(L사이즈) 확인
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
