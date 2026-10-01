@@ -11,23 +11,52 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 세로 꺾임 방지 커스텀 CSS (한 줄에 여러 개 카드 유지)
+# 모바일 가로 깨짐 및 화면 넘침 방지 정밀 CSS
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-/* 모바일 화면에서도 st.columns가 세로 1줄로 자동 전환되는 것을 방지 */
+/* 여백 제거 및 모바일 100% 폭 맞춤 */
+.main .block-container {
+    padding-left: 0.3rem !important;
+    padding-right: 0.3rem !important;
+    padding-top: 1rem !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+}
+
+/* 2열 카드 그리드 모바일 최적화 (넘침 차단) */
 div[data-testid="stHorizontalBlock"] {
+    display: flex !important;
     flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    gap: 8px !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    width: 100% !important;
 }
+
 div[data-testid="column"] {
-    min-width: 0 !important;
-    flex: 1 1 0% !important;
+    flex: 1 1 calc(50% - 6px) !important;
+    min-width: calc(50% - 6px) !important;
+    max-width: calc(50% - 6px) !important;
+    box-sizing: border-box !important;
 }
-/* 카드 내부 요소 간격 최적화 */
-div[data-testid="stVerticalBlock"] > div {
-    gap: 4px !important;
+
+/* 카드 내 폼/버튼 간격 축소 및 텍스트 자동 줄바꿈 */
+div[data-testid="stVerticalBlock"] {
+    gap: 2px !important;
+}
+
+/* 모바일 버튼/팝오버 슬림 스타일 */
+div[data-testid="stPopover"] > button, div[data-testid="stElementContainer"] button {
+    font-size: 11px !important;
+    padding: 2px 4px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    line-height: 1.2 !important;
+}
+
+p, span, div, h1, h2, h3, h4 {
+    word-break: break-all !important;
+    overflow-wrap: break-word !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -44,16 +73,17 @@ except Exception as e:
     st.stop()
 
 # ---------------------------------------------------------
-# 안전한 이미지 출력 헬퍼 함수
+# 안전한 이미지 출력 헬퍼 함수 (CDN 주소 정밀 보정)
 # ---------------------------------------------------------
 def render_image(image_url, **kwargs):
     """이미지 URL 유효성을 검사하여 에러 없이 안전하게 출력합니다."""
     if image_url and isinstance(image_url, str):
-        if image_url.startswith("//"):
-            image_url = f"https:{image_url}"
-        if image_url.startswith("http"):
+        url = image_url.strip()
+        if url.startswith("//"):
+            url = f"https:{url}"
+        if url.startswith("http"):
             try:
-                st.image(image_url, **kwargs)
+                st.image(url, **kwargs)
                 return
             except Exception:
                 pass
@@ -129,7 +159,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다."""
+    """무신사 상품 정보, 브랜드명 및 이미지를 정밀 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -163,11 +193,19 @@ def get_musinsa_goods_info(goods_id):
 
                         price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
                         normal_price = data.get("normalPrice") or data.get("originalPrice") or price
-                        image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or ""
+                        image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or data.get("goodsImg") or ""
+
+                        if not image_url:
+                            img_m = re.search(r'(?:https?:)?//image\.msscdn\.net/images/goods_img/[^\s"\']+', raw_text)
+                            if img_m:
+                                image_url = img_m.group(0)
 
                         if goods_name and price:
-                            if image_url and not image_url.startswith("http"):
+                            if image_url and image_url.startswith("//"):
                                 image_url = f"https:{image_url}"
+                            elif image_url and not image_url.startswith("http"):
+                                image_url = f"https://image.msscdn.net{image_url}" if image_url.startswith("/") else f"https:{image_url}"
+
                             price = int(price)
                             normal_price = int(normal_price) if normal_price else price
                             discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
@@ -202,8 +240,7 @@ def get_musinsa_goods_info(goods_id):
                 )
                 image_match = (
                     re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', raw_text) or
-                    re.search(r'"thumbnailImageUrl"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'"imageUrl"\s*:\s*"([^"]+)"', raw_text)
+                    re.search(r'(?:https?:)?//image\.msscdn\.net/images/goods_img/[^\s"\']+', raw_text)
                 )
 
                 if name_match and price_match:
@@ -211,9 +248,9 @@ def get_musinsa_goods_info(goods_id):
                     brand_name = extract_brand_name(raw_text)
                     price = int(price_match.group(1))
                     normal_price = int(normal_price_match.group(1)) if normal_price_match else price
-                    image_url = image_match.group(1) if image_match else ""
+                    image_url = image_match.group(0) if image_match else ""
 
-                    if image_url and not image_url.startswith("http"):
+                    if image_url and image_url.startswith("//"):
                         image_url = f"https:{image_url}"
 
                     discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
@@ -235,10 +272,21 @@ def get_musinsa_goods_info(goods_id):
 
     return None
 
-# DB 데이터 렌더링 헬퍼 (시간 정보 정제 포함)
+# DB 데이터 렌더링 헬퍼
 def load_tracked_products():
     res = supabase.table("tracked_products").select("*").order("created_at", desc=True).execute()
-    return pd.DataFrame(res.data)
+    df = pd.DataFrame(res.data)
+    
+    # 누락된 이미지 자동 보정 로직
+    if not df.empty:
+        for idx, row in df.iterrows():
+            img = str(row.get("image_url") or "").strip()
+            if not img or img == "None" or not img.startswith("http"):
+                info = get_musinsa_goods_info(row["goods_id"])
+                if info and info.get("image_url"):
+                    supabase.table("tracked_products").update({"image_url": info["image_url"]}).eq("goods_id", row["goods_id"]).execute()
+                    df.at[idx, "image_url"] = info["image_url"]
+    return df
 
 def load_price_logs():
     res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
@@ -247,7 +295,6 @@ def load_price_logs():
         df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
         df = df.dropna(subset=["created_at"])
         
-        # KST 시간 변환 후 YYYY-MM-DD 날짜 전용 문자열 생성
         df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
         df["date_str"] = df["created_at_kst"].dt.strftime("%Y-%m-%d")
         
@@ -303,7 +350,7 @@ main_tab1, main_tab2 = st.tabs([
 ])
 
 # =========================================================
-# MAIN TAB 1: 무신사 개별 상품 트래커 (하위 3개 세부 탭)
+# MAIN TAB 1: 무신사 개별 상품 트래커
 # =========================================================
 with main_tab1:
     musinsa_tab1, musinsa_tab2, musinsa_tab3 = st.tabs([
@@ -328,7 +375,6 @@ with main_tab1:
         if products_df.empty:
             st.info("아직 추적 중인 상품이 없습니다. '➕ 추적 상품 관리' 탭에서 상품을 추가해 보세요!")
         else:
-            # 태그 목록 동적 추출
             tag_options = ["전체"]
             if "tags" in products_df.columns:
                 extracted_tags = set()
@@ -343,7 +389,6 @@ with main_tab1:
             with col_f1:
                 selected_tag = st.selectbox("🏷️ 태그 필터", tag_options)
 
-            # 태그 1차 필터링
             filtered_products = products_df.copy()
             if selected_tag != "전체":
                 clean_tag = selected_tag.lstrip('#')
@@ -448,11 +493,10 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 2열 카드 그리드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 2열 정밀 카드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
-        st.caption("무신사 상품 URL 또는 ID를 입력하면 수집 대상에 추가되고 초기 데이터가 저장됩니다.")
 
         with st.form("add_product_form", clear_on_submit=True):
             input_url = st.text_input("무신사 상품 URL 또는 ID", placeholder="예: https://www.musinsa.com/app/goods/2081557 또는 2081557")
@@ -495,16 +539,13 @@ with main_tab1:
                             }
                             supabase.table("price_logs").insert(log_data).execute()
 
-                            st.success(f"✅ **[{info['brand_name']}] {info['goods_name']}** 상품이 성공적으로 등록되었습니다!")
+                            st.success(f"✅ **[{info['brand_name']}] {info['goods_name']}** 상품이 등록되었습니다!")
                             st.rerun()
                         else:
                             st.error("🚨 상품 정보 수집에 실패하여 DB에 등록하지 못했습니다.")
 
         st.divider()
 
-        # -------------------------------------------------
-        # 추적 상품 목록 태그 필터 + 모바일 2열 카드 그리드
-        # -------------------------------------------------
         st.subheader("📋 현재 추적 중인 상품 목록")
         tracked_df = load_tracked_products()
         logs_df = load_price_logs()
@@ -534,27 +575,21 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
-                # 모바일 화면에 최적화된 2열 그리드 배치
-                cols_count = 2
                 items_list = list(filtered_tracked.iterrows())
-                
-                for i in range(0, len(items_list), cols_count):
-                    cols = st.columns(cols_count)
-                    for j in range(cols_count):
+                for i in range(0, len(items_list), 2):
+                    cols = st.columns(2)
+                    for j in range(2):
                         if i + j < len(items_list):
                             _, row = items_list[i + j]
                             with cols[j]:
                                 with st.container(border=True):
-                                    # 1. 상품 사진
                                     render_image(row.get("image_url"), use_container_width=True)
 
-                                    # 2. 브랜드 & 상품명
                                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
                                     if brand:
                                         st.caption(f"**{brand}**")
                                     st.markdown(f"**{row['goods_name']}**")
 
-                                    # 3. 가격 & 할인율
                                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
                                     if not p_logs.empty:
                                         latest_p = p_logs.iloc[-1]
@@ -563,13 +598,12 @@ with main_tab1:
                                         disc = latest_p.get('discount_rate', 0)
 
                                         if n_price > c_price and disc > 0:
-                                            st.markdown(f"<span style='color:#d9480f; font-weight:bold; font-size:14px;'>{disc}%</span> <b style='font-size:15px;'>{c_price:,}원</b>", unsafe_allow_html=True)
+                                            st.markdown(f"<span style='color:#d9480f; font-weight:bold; font-size:13px;'>{disc}%</span> <b style='font-size:14px;'>{c_price:,}원</b>", unsafe_allow_html=True)
                                         else:
-                                            st.markdown(f"<b style='font-size:15px;'>{c_price:,}원</b>", unsafe_allow_html=True)
+                                            st.markdown(f"<b style='font-size:14px;'>{c_price:,}원</b>", unsafe_allow_html=True)
                                     else:
-                                        st.caption("가격 정보 수집 중")
+                                        st.caption("가격 수집 중")
 
-                                    # 4. 태그 및 수정/삭제 액션 버튼
                                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "-"
                                     st.caption(f"🏷️ `{curr_tag}`")
 
@@ -595,12 +629,10 @@ with main_tab1:
                                             st.rerun()
 
     # -----------------------------------------------------
-    # SUB TAB 3: 무신사 실시간 조회 (테스트)
+    # SUB TAB 3: 무신사 실시간 조회
     # -----------------------------------------------------
     with musinsa_tab3:
         st.subheader("⚡ 실시간 가격 조회 (DB 저장 X)")
-        st.caption("DB에 저장하지 않고 입력한 URL의 현재 정보를 즉시 파싱해 봅니다.")
-
         test_input = st.text_input("테스트할 무신사 상품 URL 또는 ID", value="2081557")
         if st.button("🔍 실시간 조회"):
             if not test_input.strip():
@@ -608,7 +640,7 @@ with main_tab1:
             else:
                 g_id = parse_goods_id(test_input)
                 if not g_id:
-                    st.error("❌ 입력한 문자열에서 올바른 상품 ID(숫자)를 추출하지 못했습니다.")
+                    st.error("❌ 올바른 상품 ID(숫자)를 추출하지 못했습니다.")
                 else:
                     with st.spinner(f"상품 ID({g_id}) 실시간 정보 조회 중..."):
                         live = get_musinsa_goods_info(g_id)
@@ -632,15 +664,12 @@ with main_tab1:
 # =========================================================
 with main_tab2:
     st.subheader("🏷️ 태그별 상품 가격 비교 대시보드")
-    st.caption("등록한 커스텀 태그(#상의, #봄아우터 등)별로 그룹화하여 가격 변동 추이를 한눈에 비교합니다.")
-
     products_df = load_tracked_products()
     logs_df = load_price_logs()
 
     if products_df.empty:
-        st.info("추적 중인 상품이 없습니다. '➕ 추적 상품 관리' 탭에서 상품과 태그를 먼저 등록해 보세요!")
+        st.info("추적 중인 상품이 없습니다.")
     else:
-        # 태그 목록 동적 추출
         tag_options = []
         if "tags" in products_df.columns:
             extracted_tags = set()
@@ -652,7 +681,7 @@ with main_tab2:
             tag_options = sorted(list(extracted_tags))
 
         if not tag_options:
-            st.warning("등록된 태그가 없습니다. '➕ 추적 상품 관리' 탭에서 상품 추가/수정 시 #태그를 입력해 보세요!")
+            st.warning("등록된 태그가 없습니다.")
         else:
             selected_tag = st.selectbox("🏷️ 비교할 태그 선택", tag_options)
             clean_tag = selected_tag.lstrip('#')
@@ -677,7 +706,6 @@ with main_tab2:
                             axis=1
                         )
 
-                        # Y축 여백 자동 정밀 세팅
                         t_min = int(tag_logs["price"].min())
                         t_max = int(tag_logs["price"].max())
                         t_pad = max(5000, int((t_max - t_min) * 0.2)) if t_max != t_min else 10000
