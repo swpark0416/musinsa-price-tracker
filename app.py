@@ -272,11 +272,11 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 모바일 URL 기반 정밀 크롤러 (L - 품절 100% 필터링)
+# 자바나스(MakeShop) 안정화 크롤러 (L사이즈 품절 완전 차단)
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """자바나스의 최상위 카테고리만 깔끔하게 수집합니다."""
+    """자바나스의 최상위 카테고리만 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     }
@@ -292,7 +292,7 @@ def get_zavanas_categories():
         try:
             res = requests.get(target_url, headers=headers, timeout=5)
             try:
-                html_text = html.unescape(res.content.decode('cp949', 'errors'))
+                html_text = html.unescape(res.content.decode('cp949', 'replace'))
             except Exception:
                 html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
                 
@@ -338,7 +338,7 @@ def get_zavanas_categories():
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """모바일 상세 URL(m/product.html)을 사용하여 L사이즈 품절 상태를 100% 감지 및 걸러냅니다."""
+    """모바일 상세 URL(m/product.html) 기반 L사이즈 품절 정밀 판별 함수"""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     }
@@ -350,16 +350,16 @@ def fetch_zabanus_l_stock(category_name, category_url):
             return []
 
         try:
-            html_text = html.unescape(res.content.decode('cp949', 'errors'))
+            html_text = html.unescape(res.content.decode('cp949', 'replace'))
         except Exception:
             html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
 
         soup = BeautifulSoup(html_text, "html.parser")
         
-        # 상품 branduid 추출 후 모바일 전용 상세페이지 주소(m/product.html)로 재구성
+        # 상품 branduid 추출 후 모바일 URL(m/product.html?branduid=...) 생성
         product_links = []
-        for a_tag in soup.select('a[href*="branduid="]'):
-            href = a_tag.get('href', '')
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
             match = re.search(r'branduid=(\d+)', href)
             if match:
                 buid = match.group(1)
@@ -367,28 +367,33 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if mobile_url not in product_links:
                     product_links.append(mobile_url)
 
-        for prod_link in product_links[:20]:
+        for prod_link in product_links[:25]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
                 try:
-                    detail_html = html.unescape(detail_res.content.decode('cp949', 'errors'))
+                    detail_html = html.unescape(detail_res.content.decode('cp949', 'replace'))
                 except Exception:
                     detail_html = html.unescape(detail_res.content.decode('utf-8', 'ignore'))
 
                 detail_soup = BeautifulSoup(detail_html, "html.parser")
                 
-                # --- 1. 상품명 정밀 파싱 ---
+                # --- 1. 상품명 파싱 ---
                 prod_name = ""
-                title_tag = detail_soup.select_one('title')
-                if title_tag and title_tag.text:
-                    raw_title = title_tag.text.strip()
-                    clean_title = re.sub(r'[\-\|\:]\s*자바나스.*$', '', raw_title, flags=re.IGNORECASE).strip()
-                    clean_title = re.sub(r'^자바나스\(zavanas\).*?-\s*', '', clean_title, flags=re.IGNORECASE).strip()
-                    if clean_title and "공식 온라인 스토어" not in clean_title and "since 2009" not in clean_title:
-                        prod_name = clean_title
+                og_title = detail_soup.select_one('meta[property="og:title"]')
+                if og_title and og_title.get("content"):
+                    prod_name = og_title["content"].strip()
 
                 if not prod_name:
-                    name_selectors = ['.prd-name', '.detail_title', '.item_title', '.goods_name', 'h2', 'h3', '.prd_name', '#detail_info_title']
+                    title_tag = detail_soup.select_one('title')
+                    if title_tag and title_tag.text:
+                        raw_title = title_tag.text.strip()
+                        clean_title = re.sub(r'[\-\|\:]\s*자바나스.*$', '', raw_title, flags=re.IGNORECASE).strip()
+                        clean_title = re.sub(r'^자바나스\(zavanas\).*?-\s*', '', clean_title, flags=re.IGNORECASE).strip()
+                        if clean_title and "공식 온라인 스토어" not in clean_title and "since 2009" not in clean_title:
+                            prod_name = clean_title
+
+                if not prod_name:
+                    name_selectors = ['.prd-name', '.detail_title', '.item_title', '.goods_name', 'h2', 'h3', '.prd_name', '#detail_info_title', '.product-name']
                     for sel in name_selectors:
                         tag = detail_soup.select_one(sel)
                         if tag and tag.text.strip():
@@ -400,17 +405,17 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not prod_name:
                     prod_name = "자바나스 상품"
 
-                # --- 2. 이미지 추출 ---
+                # --- 2. 이미지 파싱 ---
                 img_tag = detail_soup.select_one('meta[property="og:image"]')
                 img_url = img_tag.get("content", "") if img_tag else ""
                 
-                # --- 3. 가격 정밀 파싱 ---
+                # --- 3. 가격 파싱 ---
                 price = ""
                 price_meta = detail_soup.select_one('meta[property="product:price:amount"]')
                 if price_meta and price_meta.get("content"):
                     try:
                         price = f"{int(price_meta['content']):,}원"
-                    except:
+                    except Exception:
                         price = price_meta.get("content")
 
                 if not price or price == "0원":
@@ -425,48 +430,48 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not price:
                     price = "가격 확인"
 
-                # --- 4. 모바일 옵션 태그에서 L사이즈 및 품절 여부 검사 ---
-                options = detail_soup.select("select option")
-                has_l_size = False
+                # --- 4. L사이즈 재고 정밀 판별 ---
+                l_instock_count = 0
                 l_options_found = []
 
+                options = detail_soup.find_all("option")
                 for opt in options:
                     opt_text = opt.text.strip()
                     opt_val = opt.get('value', '').strip()
 
-                    if not opt_val or opt_val in ["0", "none", ""] or "선택" in opt_text:
+                    if not opt_text or "선택" in opt_text or opt_val in ["0", "none", ""]:
                         continue
 
-                    # L / LARGE / 100 사이즈 단독 매칭
+                    # L / LARGE / 100 단독 사이즈 매칭 (XL, XXL 등 오인 차단)
                     is_l_size = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
 
-                    combined_str = f"{opt_text} {opt_val}".upper().replace(" ", "")
-                    is_soldout = (
-                        ("품절" in opt_text)
-                        or ("SOLDOUT" in combined_str)
-                        or ("OUTOFSTOCK" in combined_str)
-                        or ("재고없음" in combined_str)
-                        or opt.has_attr('disabled')
-                        or 'disabled' in opt.get('class', [])
-                    )
+                    if is_l_size:
+                        combined = f"{opt_text} {opt_val}".upper()
+                        is_sold = (
+                            ("품절" in opt_text) or
+                            ("SOLDOUT" in combined) or
+                            ("OUTOFSTOCK" in combined) or
+                            ("재고없음" in combined) or
+                            opt.has_attr('disabled') or
+                            ('disabled' in opt.get('class', []))
+                        )
 
-                    if is_l_size and not is_soldout:
-                        has_l_size = True
-                        l_options_found.append(opt_text)
+                        if not is_sold:
+                            l_instock_count += 1
+                            l_options_found.append(opt_text)
 
-                # --- 5. 원문 HTML 강제 2차 검증 (Fail-Safe) ---
-                # 페이지 원문에 'L - 품절', 'L-품절', 'L(품절)' 문구가 포함되어 있다면 무조건 차단
+                # --- 5. 2차 강제 차단 (HTML 원문 스캔) ---
                 soldout_patterns = [
                     r'(?<![A-Z0-9])(?:L|LARGE|100)\s*[\-\:\(\[\_\s]*품\s*절',
                     r'품\s*절\s*[\-\:\(\[\_\s]*(?<![A-Z0-9])(?:L|LARGE|100)(?![A-Z0-9])'
                 ]
                 for pat in soldout_patterns:
                     if re.search(pat, detail_html, re.IGNORECASE):
-                        has_l_size = False
+                        l_instock_count = 0
                         l_options_found = []
                         break
 
-                if has_l_size:
+                if l_instock_count > 0:
                     available_items.append({
                         "name": prod_name,
                         "price": price,
@@ -755,7 +760,7 @@ with main_tab2:
         l_products = fetch_zabanus_l_stock(selected_cat_key, cat_url)
 
     if not l_products:
-        st.info(f"현재 **{selected_cat_key}** 카테고리에 L사이즈 재고가 남아있는 상품이 없거나 수집 중입니다.")
+        st.info(f"현재 **{selected_cat_key}** 카테고리에 L사이즈 재고가 남아있는 상품이 없습니다.")
     else:
         st.success(f"총 **{len(l_products)}개**의 상품에서 L사이즈 구매가 가능합니다!")
         
