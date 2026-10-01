@@ -11,51 +11,49 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 이미지 차단 방지 메타 태그 & 모바일 2열 레이아웃 CSS
+# 모바일 3열(3개씩) 카드 그리드 강제 유지 CSS
 # ---------------------------------------------------------
-st.markdown('<meta name="referrer" content="no-referrer">', unsafe_allow_html=True)
-
 st.markdown("""
 <style>
-/* 모바일 화면 2열 카드 그리드 레이아웃 오버라이드 */
+/* 모바일 화면 3열 카드 그리드 레이아웃 오버라이드 */
 @media screen and (max-width: 768px) {
     div[data-testid="stHorizontalBlock"] {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: wrap !important;
-        gap: 6px !important;
+        gap: 4px !important;
         width: 100% !important;
     }
     div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-        width: calc(50% - 3px) !important;
-        flex: 0 0 calc(50% - 3px) !important;
-        min-width: calc(50% - 3px) !important;
-        max-width: calc(50% - 3px) !important;
+        width: calc(33.333% - 3px) !important;
+        flex: 0 0 calc(33.333% - 3px) !important;
+        min-width: calc(33.333% - 3px) !important;
+        max-width: calc(33.333% - 3px) !important;
         box-sizing: border-box !important;
     }
 }
 
 /* 스마트폰 여백 및 스크롤 패딩 최적화 */
 .main .block-container {
-    padding-left: 0.3rem !important;
-    padding-right: 0.3rem !important;
+    padding-left: 0.2rem !important;
+    padding-right: 0.2rem !important;
     padding-top: 0.8rem !important;
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
 
-/* 카드 내부 요소 간격 보정 (텍스트 겹침 방지) */
+/* 카드 내부 요소 간격 보정 */
 div[data-testid="stVerticalBlock"] {
-    gap: 4px !important;
+    gap: 2px !important;
 }
 
-/* 버튼/팝오버 컴팩트 스타일 */
+/* 초슬림 버튼/팝오버 스타일 */
 .stButton > button, div[data-testid="stPopover"] > button {
-    font-size: 11px !important;
-    padding: 2px 4px !important;
-    height: 28px !important;
-    min-height: 28px !important;
-    line-height: 1.2 !important;
+    font-size: 10px !important;
+    padding: 1px 2px !important;
+    height: 24px !important;
+    min-height: 24px !important;
+    line-height: 1.1 !important;
 }
 
 p, span, div, h1, h2, h3, h4 {
@@ -77,29 +75,7 @@ except Exception as e:
     st.stop()
 
 # ---------------------------------------------------------
-# 무신사 이미지 차단 우회(no-referrer) 렌더링 함수
-# ---------------------------------------------------------
-def render_image(image_url, height=130, **kwargs):
-    """이미지 URL 유효성을 검사하여 무신사 이미지 차단을 우회하여 렌더링합니다."""
-    if image_url and isinstance(image_url, str):
-        url = image_url.strip()
-        if url.startswith("//"):
-            url = f"https:{url}"
-        if url.startswith("http"):
-            st.markdown(
-                f'<div style="text-align:center; width:100%; border-radius:6px; overflow:hidden; background:#f4f4f4; margin-bottom:4px;">'
-                f'<img src="{url}" referrerpolicy="no-referrer" rel="noreferrer" style="width:100%; height:{height}px; object-fit:cover; display:block;" />'
-                f'</div>',
-                unsafe_allow_html=True
-            )
-            return
-    st.markdown(
-        f'<div style="width:100%; height:{height}px; background:#f1f3f5; border-radius:6px; display:flex; align-items:center; justify-content:center; color:#adb5bd; font-size:11px; margin-bottom:4px;">🖼️ 이미지 없음</div>',
-        unsafe_allow_html=True
-    )
-
-# ---------------------------------------------------------
-# 무신사 크롤링 및 이미지 정밀 파싱 함수
+# 무신사 크롤링 및 파싱 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
     """공유 링크, 단축 URL, 일반 웹주소에서 진짜 상품 ID를 추출합니다."""
@@ -168,7 +144,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보, 브랜드명 및 이미지를 탐지 수집합니다."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -202,19 +178,8 @@ def get_musinsa_goods_info(goods_id):
 
                         price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
                         normal_price = data.get("normalPrice") or data.get("originalPrice") or price
-                        image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or data.get("goodsImg") or ""
-
-                        if not image_url:
-                            img_m = re.search(r'(?:https?:)?//image\.msscdn\.net/images/goods_img/[^\s"\']+', raw_text)
-                            if img_m:
-                                image_url = img_m.group(0)
 
                         if goods_name and price:
-                            if image_url.startswith("//"):
-                                image_url = f"https:{image_url}"
-                            elif image_url and not image_url.startswith("http"):
-                                image_url = f"https://image.msscdn.net{image_url}" if image_url.startswith("/") else f"https:{image_url}"
-
                             price = int(price)
                             normal_price = int(normal_price) if normal_price else price
                             discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
@@ -223,7 +188,6 @@ def get_musinsa_goods_info(goods_id):
                                 "goods_id": str(goods_id),
                                 "goods_name": goods_name,
                                 "brand_name": brand_name,
-                                "image_url": image_url,
                                 "category": "의류",
                                 "normal_price": normal_price,
                                 "price": price,
@@ -247,31 +211,18 @@ def get_musinsa_goods_info(goods_id):
                     re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
                     re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
                 )
-                image_match = (
-                    re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', raw_text) or
-                    re.search(r'(?:https?:)?//image\.msscdn\.net/images/goods_img/[^\s"\']+', raw_text)
-                )
 
                 if name_match and price_match:
                     goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
                     brand_name = extract_brand_name(raw_text)
                     price = int(price_match.group(1))
                     normal_price = int(normal_price_match.group(1)) if normal_price_match else price
-                    
-                    image_url = ""
-                    if image_match:
-                        image_url = image_match.group(1) if len(image_match.groups()) > 0 else image_match.group(0)
-
-                    if image_url.startswith("//"):
-                        image_url = f"https:{image_url}"
-
                     discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
                     return {
                         "goods_id": str(goods_id),
                         "goods_name": goods_name,
                         "brand_name": brand_name,
-                        "image_url": image_url,
                         "category": "의류",
                         "normal_price": normal_price,
                         "price": price,
@@ -284,25 +235,10 @@ def get_musinsa_goods_info(goods_id):
 
     return None
 
-# DB 데이터 렌더링 헬퍼 (깨진 이미지 자동 수복 포함)
+# DB 데이터 렌더링 헬퍼
 def load_tracked_products():
     res = supabase.table("tracked_products").select("*").order("created_at", desc=True).execute()
-    df = pd.DataFrame(res.data)
-    
-    if not df.empty:
-        for idx, row in df.iterrows():
-            img = str(row.get("image_url") or "").strip()
-            if not img or img.lower() == "none" or not img.startswith("http"):
-                g_id = row["goods_id"]
-                info = get_musinsa_goods_info(g_id)
-                if info and info.get("image_url"):
-                    new_img = info["image_url"]
-                    try:
-                        supabase.table("tracked_products").update({"image_url": new_img}).eq("goods_id", g_id).execute()
-                    except Exception:
-                        pass
-                    df.at[idx, "image_url"] = new_img
-    return df
+    return pd.DataFrame(res.data)
 
 def load_price_logs():
     res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
@@ -421,37 +357,33 @@ with main_tab1:
                 product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
                 g_id = product_info["goods_id"]
 
-                card_col1, card_col2 = st.columns([1, 3])
-                with card_col1:
-                    render_image(product_info.get("image_url"), height=160)
-                with card_col2:
-                    brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
-                    if brand:
-                        st.caption(f"🏷 **{brand}**")
-                    st.subheader(product_info["goods_name"])
-                    st.caption(f"태그: {product_info.get('tags', '-')}")
-                    
-                    product_logs = logs_df[logs_df["goods_id"] == g_id] if not logs_df.empty else pd.DataFrame()
-                    
-                    if not product_logs.empty:
-                        latest_row = product_logs.iloc[-1]
-                        min_price = int(product_logs["price"].min())
-                        max_discount = product_logs["discount_rate"].max()
-                        norm_price = int(latest_row['normal_price'])
-                        curr_price = int(latest_row['price'])
+                brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
+                if brand:
+                    st.caption(f"🏷 **{brand}**")
+                st.subheader(product_info["goods_name"])
+                st.caption(f"태그: {product_info.get('tags', '-')}")
+                
+                product_logs = logs_df[logs_df["goods_id"] == g_id] if not logs_df.empty else pd.DataFrame()
+                
+                if not product_logs.empty:
+                    latest_row = product_logs.iloc[-1]
+                    min_price = int(product_logs["price"].min())
+                    max_discount = product_logs["discount_rate"].max()
+                    norm_price = int(latest_row['normal_price'])
+                    curr_price = int(latest_row['price'])
 
-                        st.markdown(f"""
-                        <div style="background-color: #f8f9fa; padding: 10px 14px; border-radius: 8px; border: 1px solid #e9ecef; margin: 8px 0;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px;">
-                                <div><span style="color: #6c757d;">정가:</span> <del style="color: #868e96;">{norm_price:,}원</del></div>
-                                <div><span style="color: #6c757d;">현재 판매가:</span> <b style="color: #212529; font-size: 13px;">{curr_price:,}원</b></div>
-                                <div><span style="color: #6c757d;">기간 내 최저가:</span> <b style="color: #1971c2;">{min_price:,}원</b></div>
-                                <div><span style="color: #6c757d;">최대 할인율:</span> <b style="color: #d9480f;">{max_discount}% 🔥</b></div>
-                            </div>
+                    st.markdown(f"""
+                    <div style="background-color: #f8f9fa; padding: 10px 14px; border-radius: 8px; border: 1px solid #e9ecef; margin: 8px 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+                            <div><span style="color: #6c757d;">정가:</span> <del style="color: #868e96;">{norm_price:,}원</del></div>
+                            <div><span style="color: #6c757d;">현재 판매가:</span> <b style="color: #212529; font-size: 13px;">{curr_price:,}원</b></div>
+                            <div><span style="color: #6c757d;">기간 내 최저가:</span> <b style="color: #1971c2;">{min_price:,}원</b></div>
+                            <div><span style="color: #6c757d;">최대 할인율:</span> <b style="color: #d9480f;">{max_discount}% 🔥</b></div>
                         </div>
-                        """, unsafe_allow_html=True)
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                    st.markdown(f"👉 [무신사 상품 페이지 바로가기]({product_info['url']})")
+                st.markdown(f"👉 [무신사 상품 페이지 바로가기]({product_info['url']})")
 
                 st.divider()
 
@@ -509,7 +441,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 2열 정밀 카드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 3개씩 고정 카드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -534,7 +466,6 @@ with main_tab1:
                                 "goods_id": info["goods_id"],
                                 "goods_name": info["goods_name"],
                                 "brand_name": info["brand_name"],
-                                "image_url": info["image_url"],
                                 "category": "의류",
                                 "tags": input_tags,
                                 "url": info["url"]
@@ -591,24 +522,22 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
+                # 모바일 화면에도 한 줄에 3개씩 배치 (3열 그리드)
                 items_list = list(filtered_tracked.iterrows())
-                for i in range(0, len(items_list), 2):
-                    cols = st.columns(2)
-                    for j in range(2):
+                for i in range(0, len(items_list), 3):
+                    cols = st.columns(3)
+                    for j in range(3):
                         if i + j < len(items_list):
                             _, row = items_list[i + j]
                             with cols[j]:
                                 with st.container(border=True):
-                                    # 1. 이미지
-                                    render_image(row.get("image_url"), height=130)
-
-                                    # 2. 브랜드 & 상품명
+                                    # 1. 브랜드 & 상품명
                                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
                                     if brand:
                                         st.caption(f"**{brand}**")
-                                    st.markdown(f"<div style='font-size:12px; font-weight:bold; line-height:1.2; min-height:28px; margin-bottom:4px;'>{row['goods_name']}</div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='font-size:11px; font-weight:bold; line-height:1.2; min-height:26px; margin-bottom:4px;'>{row['goods_name']}</div>", unsafe_allow_html=True)
 
-                                    # 3. 가격
+                                    # 2. 가격 및 할인율
                                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
                                     if not p_logs.empty:
                                         latest_p = p_logs.iloc[-1]
@@ -617,15 +546,17 @@ with main_tab1:
                                         disc = latest_p.get('discount_rate', 0)
 
                                         if n_price > c_price and disc > 0:
-                                            st.markdown(f"<div style='margin-bottom:4px;'><span style='color:#d9480f; font-weight:bold; font-size:12px;'>{disc}%</span> <b style='font-size:13px; margin-left:2px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='margin-bottom:2px;'><span style='color:#d9480f; font-weight:bold; font-size:11px;'>{disc}%</span> <b style='font-size:12px; margin-left:1px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
                                         else:
-                                            st.markdown(f"<div style='margin-bottom:4px;'><b style='font-size:13px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
+                                            st.markdown(f"<div style='margin-bottom:2px;'><b style='font-size:12px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
                                     else:
                                         st.caption("가격 수집 중")
 
+                                    # 3. 태그
                                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "-"
-                                    st.markdown(f"<div style='font-size:11px; color:#495057; margin-bottom:6px;'>🏷️ {curr_tag}</div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='font-size:10px; color:#495057; margin-bottom:4px;'>🏷️ {curr_tag}</div>", unsafe_allow_html=True)
 
+                                    # 4. 수정 / 삭제 버튼
                                     btn_c1, btn_c2 = st.columns(2)
                                     with btn_c1:
                                         with st.popover("✏️태그", use_container_width=True):
@@ -665,16 +596,12 @@ with main_tab1:
                         live = get_musinsa_goods_info(g_id)
                         if live:
                             st.success("🎉 실시간 조회 성공!")
-                            tc1, tc2 = st.columns([1, 3])
-                            with tc1:
-                                render_image(live.get("image_url"), height=150)
-                            with tc2:
-                                st.write(f"**브랜드:** {live['brand_name']}")
-                                st.write(f"**상품명:** {live['goods_name']}")
-                                st.markdown(f"**정가:** ~~{live['normal_price']:,} 원~~")
-                                st.markdown(f"**판매가:** {live['price']:,} 원")
-                                st.markdown(f"**할인율:** {live['discount_rate']}% 🔥")
-                                st.markdown(f"👉 [페이지 열기]({live['url']})")
+                            st.write(f"**브랜드:** {live['brand_name']}")
+                            st.write(f"**상품명:** {live['goods_name']}")
+                            st.markdown(f"**정가:** ~~{live['normal_price']:,} 원~~")
+                            st.markdown(f"**판매가:** {live['price']:,} 원")
+                            st.markdown(f"**할인율:** {live['discount_rate']}% 🔥")
+                            st.markdown(f"👉 [페이지 열기]({live['url']})")
                         else:
                             st.error("🚨 실시간 가격 조회에 실패했습니다.")
 
@@ -766,11 +693,7 @@ with main_tab2:
                 st.markdown(f"#### 📋 {selected_tag} 태그 포함 상품 목록")
 
                 for _, p_row in tagged_products.iterrows():
-                    c1, c2 = st.columns([1, 4])
-                    with c1:
-                        render_image(p_row.get("image_url"), height=80)
-                    with c2:
-                        b_str = f"[{p_row['brand_name']}] " if pd.notna(p_row.get('brand_name')) and p_row.get('brand_name') else ""
-                        st.markdown(f"**{b_str}{p_row['goods_name']}**")
-                        st.caption(f"태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
+                    b_str = f"[{p_row['brand_name']}] " if pd.notna(p_row.get('brand_name')) and p_row.get('brand_name') else ""
+                    st.markdown(f"**{b_str}{p_row['goods_name']}**")
+                    st.caption(f"태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
                     st.divider()
