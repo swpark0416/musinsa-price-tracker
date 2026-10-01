@@ -63,127 +63,94 @@ def parse_goods_id(url_or_id):
 
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 페이지에서 상세 정보를 3단계 다중 방식으로 수집합니다."""
-    url = f"https://www.musinsa.com/products/{goods_id}"
+    """무신사 공식 상품 API를 직접 호출하여 차단 없이 정밀하게 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.musinsa.com/"
+        "Accept": "application/json, text/plain, */*",
+        "Referer": f"https://www.musinsa.com/products/{goods_id}",
+        "Origin": "https://www.musinsa.com"
     }
     
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        
-        # 404 등 예외 발생 시 구형 URL로 재요청
-        if res.status_code != 200:
-            url = f"https://www.musinsa.com/app/goods/{goods_id}"
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code != 200:
-                st.error(f"❌ 무신사 페이지 접근 실패 (HTTP 상태 코드: {res.status_code})")
-                return None
-
-        # --- 방식 1: __NEXT_DATA__ JSON 파싱 (최신 무신사 웹 구조) ---
-        next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text, re.DOTALL)
-        if next_data_match:
-            try:
-                next_json = json.loads(next_data_match.group(1))
-                page_props = next_json.get("props", {}).get("pageProps", {})
+    # 1. 무신사 상품 상세 API 직접 호출 (클라우드 차단 회피 & JSON 즉시 파싱)
+    api_urls = [
+        f"https://goods-detail.musinsa.com/goods/{goods_id}",
+        f"https://goods-detail.musinsa.com/api/goods/v2/goods/{goods_id}"
+    ]
+    
+    for api_url in api_urls:
+        try:
+            res = requests.get(api_url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                json_data = res.json()
+                data = json_data.get("data", json_data)
                 
-                # 다양한 JSON 트리 구조 대응
-                goods_data = page_props.get("goods", {}) or page_props.get("product", {}) or page_props.get("state", {}).get("goods", {})
+                goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name")
+                price = data.get("price") or data.get("salePrice") or data.get("finalPrice", 0)
+                normal_price = data.get("normalPrice") or data.get("originalPrice", price)
+                image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image", "")
                 
-                if goods_data:
-                    goods_name = goods_data.get("goodsNm") or goods_data.get("name") or goods_data.get("goodsName")
-                    price = goods_data.get("price") or goods_data.get("salePrice") or goods_data.get("finalPrice", 0)
-                    normal_price = goods_data.get("normalPrice") or goods_data.get("originalPrice", price)
-                    image_url = goods_data.get("thumbnailImageUrl") or goods_data.get("imageUrl") or goods_data.get("image", "")
-                    
-                    category = "기타"
-                    if isinstance(goods_data.get("category"), dict):
-                        category = goods_data.get("category", {}).get("categoryDepth2Name", "기타")
-                    elif isinstance(goods_data.get("categoryName"), str):
-                        category = goods_data.get("categoryName")
+                category = "기타"
+                cat_info = data.get("category")
+                if isinstance(cat_info, dict):
+                    category = cat_info.get("categoryDepth2Name") or cat_info.get("categoryDepth1Name", "기타")
+                elif isinstance(data.get("categoryName"), str):
+                    category = data.get("categoryName")
 
-                    if image_url and not image_url.startswith("http"):
-                        image_url = f"https:{image_url}"
-
-                    discount_rate = 0
-                    if normal_price and normal_price > price:
-                        discount_rate = round(((normal_price - price) / normal_price) * 100, 1)
-
-                    if goods_name and price:
-                        return {
-                            "goods_id": str(goods_id),
-                            "goods_name": goods_name,
-                            "image_url": image_url,
-                            "category": category,
-                            "normal_price": normal_price,
-                            "price": price,
-                            "discount_rate": discount_rate,
-                            "url": f"https://www.musinsa.com/products/{goods_id}"
-                        }
-            except Exception:
-                pass
-
-        # --- 방식 2: window.__MSS__ 기존 파싱 (구형/모바일 페이지) ---
-        mss_match = re.search(r'window\.__MSS__\.product\.state\s*=\s*({.*?});', res.text, re.DOTALL)
-        if mss_match:
-            try:
-                json_data = json.loads(mss_match.group(1))
-                price = json_data.get("price", 0)
-                normal_price = json_data.get("normalPrice", price)
-                image_url = json_data.get("thumbnailImageUrl", "")
                 if image_url and not image_url.startswith("http"):
                     image_url = f"https:{image_url}"
-                category = json_data.get("category", {}).get("categoryDepth2Name", "기타")
-                
+
                 discount_rate = 0
-                if normal_price > 0 and normal_price > price:
+                if normal_price and normal_price > price:
                     discount_rate = round(((normal_price - price) / normal_price) * 100, 1)
 
-                return {
-                    "goods_id": str(goods_id),
-                    "goods_name": json_data.get("goodsNm", "상품명 없음"),
-                    "image_url": image_url,
-                    "category": category,
-                    "normal_price": normal_price,
-                    "price": price,
-                    "discount_rate": discount_rate,
-                    "url": f"https://www.musinsa.com/products/{goods_id}"
-                }
-            except Exception:
-                pass
-
-        # --- 방식 3: HTML OpenGraph 메타 태그 파싱 (최후 폴백) ---
-        try:
-            og_title = re.search(r'<meta property="og:title" content="(.*?)"', res.text)
-            og_image = re.search(r'<meta property="og:image" content="(.*?)"', res.text)
-            og_price = re.search(r'<meta property="product:price:amount" content="(\d+)"', res.text) or re.search(r'"price":\s*(\d+)', res.text)
-            
-            if og_title and og_price:
-                goods_name = og_title.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "")
-                price = int(og_price.group(1))
-                image_url = og_image.group(1) if og_image else ""
-                if image_url and not image_url.startswith("http"):
-                    image_url = f"https:{image_url}"
-
-                return {
-                    "goods_id": str(goods_id),
-                    "goods_name": goods_name,
-                    "image_url": image_url,
-                    "category": "의류",
-                    "normal_price": price,
-                    "price": price,
-                    "discount_rate": 0,
-                    "url": f"https://www.musinsa.com/products/{goods_id}"
-                }
+                if goods_name and price:
+                    return {
+                        "goods_id": str(goods_id),
+                        "goods_name": goods_name,
+                        "image_url": image_url,
+                        "category": category,
+                        "normal_price": normal_price,
+                        "price": price,
+                        "discount_rate": discount_rate,
+                        "url": f"https://www.musinsa.com/products/{goods_id}"
+                    }
         except Exception:
             pass
 
-        st.error(f"❌ 무신사 상품 페이지(ID: {goods_id})의 모든 정보 파싱 방식이 실패했습니다.")
-    except Exception as e:
-        st.error(f"❌ 데이터 수집 오류: {e}")
+    # 2. API 실패 시 백업 HTML 크롤링
+    try:
+        web_url = f"https://www.musinsa.com/products/{goods_id}"
+        res = requests.get(web_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            next_data = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text, re.DOTALL)
+            if next_data:
+                pj = json.loads(next_data.group(1)).get("props", {}).get("pageProps", {})
+                gdata = pj.get("goods") or pj.get("product") or pj.get("state", {}).get("goods", {})
+                if gdata:
+                    gname = gdata.get("goodsNm") or gdata.get("name")
+                    pr = gdata.get("price") or gdata.get("salePrice", 0)
+                    npr = gdata.get("normalPrice", pr)
+                    img = gdata.get("thumbnailImageUrl") or gdata.get("imageUrl", "")
+                    if img and not img.startswith("http"): img = f"https:{img}"
+                    
+                    dr = round(((npr - pr) / npr) * 100, 1) if npr > pr else 0
+                    if gname and pr:
+                        return {
+                            "goods_id": str(goods_id),
+                            "goods_name": gname,
+                            "image_url": img,
+                            "category": "의류",
+                            "normal_price": npr,
+                            "price": pr,
+                            "discount_rate": dr,
+                            "url": f"https://www.musinsa.com/products/{goods_id}"
+                        }
+    except Exception:
+        pass
+
+    st.error(f"❌ 무신사 상품(ID: {goods_id})의 정보를 API에서 불러올 수 없습니다.")
     return None
+
 
 # DB 데이터 렌더링 헬퍼
 def load_tracked_products():
