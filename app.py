@@ -5,6 +5,7 @@ import plotly.express as px
 import requests
 import json
 import re
+import time
 
 # 페이지 기본 설정
 st.set_page_config(page_title="무신사 스마트 가격 트래커", page_icon="🛍️", layout="wide")
@@ -84,14 +85,13 @@ def extract_brand_name(raw_text, data=None):
         if bn and bn.upper() != "MUSINSA":
             return bn
 
-    # HTML 메타태그 및 본문 정규식 패턴 탐색
     patterns = [
         r'"brandName"\s*:\s*"([^"]+)"',
         r'"brandNm"\s*:\s*"([^"]+)"',
         r'"brandNameKo"\s*:\s*"([^"]+)"',
         r'<meta\s+property="product:brand"\s+content="([^"]+)"',
         r'<meta\s+property="og:brand"\s+content="([^"]+)"',
-        r'\(([^)]+)\)</a',                      # 카테고리 뒤 브랜드명 (예: 니트/스웨터 (드로우핏))
+        r'\(([^)]+)\)</a',                      
         r'goods_brand_name"\s*:\s*"([^"]+)"'
     ]
     for p in patterns:
@@ -103,7 +103,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 다중 방식으로 정밀 수집합니다."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -128,7 +128,7 @@ def get_musinsa_goods_info(goods_id):
             if res.status_code == 200:
                 raw_text = res.text
 
-                # 1차 시도: JSON 직접 파싱
+                # 1차 시도: JSON 파싱
                 try:
                     data = res.json()
                     if isinstance(data, dict):
@@ -168,7 +168,7 @@ def get_musinsa_goods_info(goods_id):
                 except Exception:
                     pass
 
-                # 2차 시도: HTML 메타태그 및 정규식 추출
+                # 2차 시도: 정규식 파싱
                 name_match = (
                     re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
                     re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
@@ -216,7 +216,6 @@ def get_musinsa_goods_info(goods_id):
         except Exception:
             continue
 
-    st.error(f"❌ 무신사 데이터 파싱 실패 (HTTP 상태 코드: {last_status or 'Timeout'})")
     return None
 
 # DB 데이터 렌더링 헬퍼
@@ -238,6 +237,48 @@ def load_price_logs():
     return df
 
 # ---------------------------------------------------------
+# 🔥 [방법 3] 앱 접속 시 오늘 가격 자동 동기화 함수
+# ---------------------------------------------------------
+def sync_today_prices_if_needed(products_df):
+    """오늘 날짜의 가격 데이터가 누락된 추적 상품을 앱 접속 시 자동으로 실시간 수집합니다."""
+    if products_df.empty:
+        return
+
+    today_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    
+    try:
+        # 오늘(한국시간) 00:00 이후에 등록된 로그가 있는 상품 ID 조회
+        today_start = f"{today_str}T00:00:00Z"
+        res = supabase.table("price_logs").select("goods_id").gte("created_at", today_start).execute()
+        synced_goods_ids = set([row["goods_id"] for row in res.data]) if res.data else set()
+    except Exception:
+        synced_goods_ids = set()
+
+    # 오늘 수집되지 않은 상품 필터링
+    unsynced_products = products_df[~products_df["goods_id"].isin(synced_goods_ids)]
+    
+    if not unsynced_products.empty:
+        updated_count = 0
+        for idx, row in unsynced_products.iterrows():
+            g_id = row["goods_id"]
+            info = get_musinsa_goods_info(g_id)
+            if info:
+                log_data = {
+                    "goods_id": info["goods_id"],
+                    "normal_price": info["normal_price"],
+                    "price": info["price"]
+                }
+                try:
+                    supabase.table("price_logs").insert(log_data).execute()
+                    updated_count += 1
+                except Exception:
+                    pass
+                time.sleep(0.5)
+        
+        if updated_count > 0:
+            st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
+
+# ---------------------------------------------------------
 # 탭 구성
 # ---------------------------------------------------------
 tab1, tab2, tab3 = st.tabs(["📊 가격 추이 대시보드", "➕ 추적 상품 관리", "⚡ 실시간 조회 (테스트)"])
@@ -247,6 +288,13 @@ tab1, tab2, tab3 = st.tabs(["📊 가격 추이 대시보드", "➕ 추적 상�
 # =========================================================
 with tab1:
     products_df = load_tracked_products()
+
+    # 앱 접속 후 세션당 1회만 오늘 자 가격 자동 동기화 수행
+    if "today_synced" not in st.session_state and not products_df.empty:
+        with st.spinner("🔄 최신 가격 정보를 자동으로 확인하는 중..."):
+            sync_today_prices_if_needed(products_df)
+        st.session_state["today_synced"] = True
+
     logs_df = load_price_logs()
 
     if products_df.empty:
@@ -263,7 +311,7 @@ with tab1:
             st.warning("해당 카테고리에 등록된 상품이 없습니다.")
         else:
             with col_f2:
-                selected_goods_name = st.selectbox("🛍️️ 조회할 상품 선택", filtered_products["goods_name"].unique())
+                selected_goods_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["goods_name"].unique())
 
             product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
             g_id = product_info["goods_id"]
@@ -272,8 +320,9 @@ with tab1:
             with card_col1:
                 render_image(product_info.get("image_url"), use_container_width=True)
             with card_col2:
-                brand = product_info.get("brand_name") or "MUSINSA"
-                st.caption(f"🏷️ **{brand}**")
+                brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
+                if brand:
+                    st.caption(f"🏷️ **{brand}**")
                 st.subheader(product_info["goods_name"])
                 st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
                 
@@ -304,7 +353,7 @@ with tab1:
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
                 
-                # 1. 판매가 변동 추이 (그리드: 만원 단위 정수, 툴팁: 원화 정수)
+                # 1. 판매가 변동 추이 (1만원 그리드, 정수 원화 툴팁)
                 min_p = int(product_logs["price"].min())
                 max_p = int(product_logs["price"].max())
 
@@ -341,7 +390,7 @@ with tab1:
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
 
-                # 2. 할인율 변동 추이 (%) - 5% 간격 설정
+                # 2. 할인율 변동 추이 (5% 간격)
                 min_d = product_logs["discount_rate"].min()
                 max_d = product_logs["discount_rate"].max()
 
@@ -406,7 +455,14 @@ with tab2:
                             "tags": input_tags,
                             "url": info["url"]
                         }
-                        supabase.table("tracked_products").upsert(prod_data).execute()
+                        
+                        try:
+                            supabase.table("tracked_products").upsert(prod_data).execute()
+                        except Exception:
+                            prod_data.pop("brand_name", None)
+                            if info["brand_name"] and info["brand_name"] != "MUSINSA":
+                                prod_data["goods_name"] = f"[{info['brand_name']}] {info['goods_name']}"
+                            supabase.table("tracked_products").upsert(prod_data).execute()
 
                         log_data = {
                             "goods_id": info["goods_id"],
@@ -431,8 +487,9 @@ with tab2:
             with col_img:
                 render_image(row.get("image_url"), width=80)
             with col_desc:
-                brand = row.get("brand_name") or "MUSINSA"
-                st.markdown(f"**[{brand}] {row['goods_name']}** (ID: `{row['goods_id']}`)")
+                brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
+                title_str = f"**[{brand}] {row['goods_name']}**" if brand else f"**{row['goods_name']}**"
+                st.markdown(f"{title_str} (ID: `{row['goods_id']}`)")
                 st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
             with col_del:
                 if st.button("🗑️ 삭제", key=f"del_{row['goods_id']}"):
