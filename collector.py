@@ -6,7 +6,7 @@ import requests
 from supabase import create_client
 
 # ---------------------------------------------------------
-# Supabase 연결 설정 (GitHub Secrets / 환경변수 사용)
+# Supabase 연결 설정 (GitHub Secrets 사용)
 # ---------------------------------------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
@@ -23,89 +23,52 @@ except Exception as e:
     exit(1)
 
 # ---------------------------------------------------------
-# 무신사 모바일 API 타겟팅 수집 함수 (403 차단 우회)
+# 무신사 순수 API 전용 수집 함수 (www.musinsa.com 우회)
 # ---------------------------------------------------------
-def get_musinsa_goods_info(goods_id):
+def get_musinsa_goods_info_api(goods_id):
     """
-    GitHub Actions의 데이터센터 IP 차단을 우회하기 위해
-    무신사 모바일 앱 네이티브 API 및 대체 엔드포인트를 탐색합니다.
+    www.musinsa.com 웹페이지를 방문하지 않고,
+    Cloudflare 검사를 받지 않는 pure API 엔드포인트만 직접 조회합니다.
     """
-    # 1. 모바일 앱 패킷 헤더 (웹 방화벽 우회용)
-    app_headers = {
+    session = requests.Session()
+    
+    # 모바일 앱 API 호출용 헤더
+    headers = {
         "User-Agent": "Musinsa/4.88.0 (iPhone; iOS 17.5; Scale/3.00)",
-        "X-Musinsa-Device-Type": "IPHONE",
-        "X-Musinsa-App-Version": "4.88.0",
-        "Accept": "application/json",
-        "Referer": "https://www.musinsa.com/"
-    }
-
-    # 2. 모바일 Web 패킷 헤더
-    web_headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": f"https://www.musinsa.com/products/{goods_id}"
+        "Origin": "https://goods-detail.musinsa.com",
+        "Referer": f"https://goods-detail.musinsa.com/goods/{goods_id}"
     }
 
-    targets = [
-        # (URL, headers, 파싱타입)
-        (f"https://goods-detail.musinsa.com/goods/{goods_id}", app_headers, "json"),
-        (f"https://www.musinsa.com/app/goods/{goods_id}", web_headers, "html"),
-        (f"https://www.musinsa.com/products/{goods_id}", web_headers, "html")
+    # API 엔드포인트 리스트
+    api_urls = [
+        f"https://goods-detail.musinsa.com/goods/{goods_id}",
+        f"https://goods-detail.musinsa.com/api/goods/v1/detail/{goods_id}",
+        f"https://goods-detail.musinsa.com/goods/{goods_id}/price"
     ]
 
-    session = requests.Session()
     last_status = None
 
-    for url, headers, resp_type in targets:
+    for url in api_urls:
         try:
             res = session.get(url, headers=headers, timeout=8)
             last_status = res.status_code
 
             if res.status_code == 200:
-                if resp_type == "json":
-                    try:
-                        data = res.json()
-                        if isinstance(data, dict):
-                            if "data" in data and isinstance(data["data"], dict):
-                                data = data["data"]
+                data = res.json()
+                if isinstance(data, dict):
+                    if "data" in data and isinstance(data["data"], dict):
+                        data = data["data"]
 
-                            goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
-                            price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
-                            normal_price = data.get("normalPrice") or data.get("originalPrice") or price
+                    goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
+                    price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
+                    normal_price = data.get("normalPrice") or data.get("originalPrice") or price
 
-                            if goods_name and price:
-                                return {
-                                    "goods_id": str(goods_id),
-                                    "goods_name": goods_name,
-                                    "normal_price": int(normal_price if normal_price else price),
-                                    "price": int(price)
-                                }
-                    except Exception:
-                        pass
-
-                elif resp_type == "html":
-                    raw_text = res.text
-                    name_match = (
-                        re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
-                        re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
-                        re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
-                    )
-                    price_match = (
-                        re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
-                        re.search(r'"price"\s*:\s*(\d+)', raw_text) or
-                        re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
-                    )
-                    normal_price_match = (
-                        re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
-                        re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
-                    )
-
-                    if name_match and price_match:
-                        goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
-                        price = int(price_match.group(1))
-                        normal_price = int(normal_price_match.group(1)) if normal_price_match else price
-
+                    if goods_name and price:
+                        price = int(price)
+                        normal_price = int(normal_price) if normal_price else price
+                        
                         return {
                             "goods_id": str(goods_id),
                             "goods_name": goods_name,
@@ -115,7 +78,7 @@ def get_musinsa_goods_info(goods_id):
         except Exception:
             continue
 
-    print(f"⚠️ [{goods_id}] 수집 실패 (최종 HTTP 상태 코드: {last_status or 'Timeout'})")
+    print(f"⚠️ [{goods_id}] API 수집 실패 (최종 HTTP 상태 코드: {last_status or 'Timeout'})")
     return None
 
 # ---------------------------------------------------------
@@ -144,7 +107,7 @@ def main():
         goods_id = prod["goods_id"]
         goods_name = prod.get("goods_name", "상품명 미상")
 
-        info = get_musinsa_goods_info(goods_id)
+        info = get_musinsa_goods_info_api(goods_id)
         if info:
             try:
                 log_data = {
