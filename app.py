@@ -272,119 +272,139 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 안정화 크롤러 (L사이즈 품절 완전 차단)
+# 자바나스(MakeShop) 메인 카테고리 복원 및 L재고 정밀 크롤러
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """자바나스의 최상위 카테고리만 수집합니다."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+    """자바나스의 최상위 순수 카테고리만 깔끔하게 중복 없이 수집합니다."""
+    pc_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     categories = {}
     
     urls_to_scan = [
-        "https://zavanas.com/m/index.html",
         "https://zavanas.com/shop/shopbrand.html?xcode=001",
         "https://zavanas.com/index.html"
     ]
     
+    # 누락 방지 기본 카테고리 사전
+    default_map = {
+        "001": "A헤비코튼/자켓/특가",
+        "002": "B에센셜피마스판",
+        "003": "스웨트셔츠",
+        "006": "아우터",
+        "007": "울자켓",
+        "009": "후디",
+        "010": "스웨트팬츠",
+        "019": "슈퍼세일",
+        "020": "롱슬리브",
+        "021": "니트",
+        "022": "가디건"
+    }
+
     for target_url in urls_to_scan:
         try:
-            res = requests.get(target_url, headers=headers, timeout=5)
+            res = requests.get(target_url, headers=pc_headers, timeout=5)
             try:
-                html_text = html.unescape(res.content.decode('cp949', 'replace'))
+                html_text = html.unescape(res.content.decode('cp949', 'ignore'))
             except Exception:
                 html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
-                
+
             soup = BeautifulSoup(html_text, "html.parser")
             
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
                 name = a_tag.text.strip()
                 
-                if "mcode=" in href:
-                    continue
-                    
                 match = re.search(r'xcode=(\d+)', href)
                 if match and name:
-                    xcode_num = match.group(1)
+                    xcode_num = match.group(1).zfill(3)
                     clean_name = re.sub(r'[\r\n\t]', '', name).strip()
                     
-                    ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY", "SEARCH", "HOME", "SHOP", "VIEW", "DETAIL", "구매"]
+                    ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY", "SEARCH", "HOME", "SHOP", "VIEW", "DETAIL", "구매", "전체"]
                     is_product_title = bool(re.match(r'^\d{2,4}\s', clean_name)) or len(clean_name) > 15
                     
                     if len(clean_name) > 1 and not is_product_title and not any(w == clean_name.upper() for w in ignore_words):
-                        dict_key = f"[{xcode_num.zfill(3)}] {clean_name}"
-                        
-                        existing_key = next((k for k in categories if k.startswith(f"[{xcode_num.zfill(3)}]")), None)
+                        # 하위 카테고리(mcode)가 있는 주소 중 대표 카테고리가 아니면 건너뜀
+                        if "mcode=" in href and "mcode=000" not in href:
+                            continue
+
+                        dict_key = f"[{xcode_num}] {clean_name}"
+                        existing_key = next((k for k in categories if k.startswith(f"[{xcode_num}]")), None)
                         if not existing_key:
                             categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
                         else:
-                            if len(clean_name) < len(existing_key.split(']', 1)[-1].strip()):
+                            # 이미 등록된 것보다 더 짧은 대표 명칭으로 교체
+                            existing_name = existing_key.split(']', 1)[-1].strip()
+                            if len(clean_name) < len(existing_name):
                                 del categories[existing_key]
                                 categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
         except Exception:
             pass
 
-    if categories:
-        sorted_cats = dict(sorted(categories.items(), key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 999))
-        return sorted_cats
+    # 누락된 대표 카테고리가 있다면 사전에 정의된 명칭으로 보완
+    for xcode, default_title in default_map.items():
+        dict_key = f"[{xcode}] {default_title}"
+        if not any(k.startswith(f"[{xcode}]") for k in categories):
+            categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode}"
 
-    return {
-        "[001] A헤비코튼/자켓/특가": "https://zavanas.com/shop/shopbrand.html?xcode=001",
-        "[002] B에센셜피마스판": "https://zavanas.com/shop/shopbrand.html?xcode=002",
-        "[021] 니트": "https://zavanas.com/shop/shopbrand.html?xcode=021"
-    }
+    sorted_cats = dict(sorted(categories.items(), key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 999))
+    return sorted_cats
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """모바일 상세 URL(m/product.html) 기반 L사이즈 품절 정밀 판별 함수"""
-    headers = {
+    """PC 카테고리 목록에서 상품을 추출하고 모바일 상세에서 L사이즈 품절 상태를 100% 걸러냅니다."""
+    pc_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    mobile_headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
     }
     
     available_items = []
     try:
-        res = requests.get(category_url, headers=headers, timeout=8)
+        res = requests.get(category_url, headers=pc_headers, timeout=8)
         if res.status_code != 200:
             return []
 
         try:
-            html_text = html.unescape(res.content.decode('cp949', 'replace'))
+            html_text = html.unescape(res.content.decode('cp949', 'ignore'))
         except Exception:
             html_text = html.unescape(res.content.decode('utf-8', 'ignore'))
 
         soup = BeautifulSoup(html_text, "html.parser")
         
-        # 상품 branduid 추출 후 모바일 URL(m/product.html?branduid=...) 생성
-        product_links = []
+        # 카테고리 페이지 내의 모든 branduid 수집
+        branduids = []
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             match = re.search(r'branduid=(\d+)', href)
             if match:
                 buid = match.group(1)
-                mobile_url = f"https://zavanas.com/m/product.html?branduid={buid}"
-                if mobile_url not in product_links:
-                    product_links.append(mobile_url)
+                if buid not in branduids:
+                    branduids.append(buid)
 
-        for prod_link in product_links[:25]:
+        for buid in branduids[:25]:
             try:
-                detail_res = requests.get(prod_link, headers=headers, timeout=5)
+                # 1. 모바일 상세 페이지에서 L-품절 여부 정밀 확인
+                m_url = f"https://zavanas.com/m/product.html?branduid={buid}"
+                m_res = requests.get(m_url, headers=mobile_headers, timeout=5)
                 try:
-                    detail_html = html.unescape(detail_res.content.decode('cp949', 'replace'))
+                    m_html = html.unescape(m_res.content.decode('cp949', 'ignore'))
                 except Exception:
-                    detail_html = html.unescape(detail_res.content.decode('utf-8', 'ignore'))
+                    m_html = html.unescape(m_res.content.decode('utf-8', 'ignore'))
 
-                detail_soup = BeautifulSoup(detail_html, "html.parser")
-                
-                # --- 1. 상품명 파싱 ---
+                m_soup = BeautifulSoup(m_html, "html.parser")
+                pc_url = f"https://zavanas.com/shop/shopdetail.html?branduid={buid}"
+
+                # --- 상품명 추출 ---
                 prod_name = ""
-                og_title = detail_soup.select_one('meta[property="og:title"]')
+                og_title = m_soup.select_one('meta[property="og:title"]')
                 if og_title and og_title.get("content"):
                     prod_name = og_title["content"].strip()
 
                 if not prod_name:
-                    title_tag = detail_soup.select_one('title')
+                    title_tag = m_soup.select_one('title')
                     if title_tag and title_tag.text:
                         raw_title = title_tag.text.strip()
                         clean_title = re.sub(r'[\-\|\:]\s*자바나스.*$', '', raw_title, flags=re.IGNORECASE).strip()
@@ -392,61 +412,44 @@ def fetch_zabanus_l_stock(category_name, category_url):
                         if clean_title and "공식 온라인 스토어" not in clean_title and "since 2009" not in clean_title:
                             prod_name = clean_title
 
-                if not prod_name:
-                    name_selectors = ['.prd-name', '.detail_title', '.item_title', '.goods_name', 'h2', 'h3', '.prd_name', '#detail_info_title', '.product-name']
-                    for sel in name_selectors:
-                        tag = detail_soup.select_one(sel)
-                        if tag and tag.text.strip():
-                            t = tag.text.strip()
-                            if "공식 온라인 스토어" not in t and "since 2009" not in t:
-                                prod_name = t
-                                break
+                if not prod_name or prod_name == "자바나스":
+                    prod_name = f"자바나스 상품 ({buid})"
 
-                if not prod_name:
-                    prod_name = "자바나스 상품"
-
-                # --- 2. 이미지 파싱 ---
-                img_tag = detail_soup.select_one('meta[property="og:image"]')
+                # --- 이미지 URL ---
+                img_tag = m_soup.select_one('meta[property="og:image"]')
                 img_url = img_tag.get("content", "") if img_tag else ""
                 
-                # --- 3. 가격 파싱 ---
-                price = ""
-                price_meta = detail_soup.select_one('meta[property="product:price:amount"]')
+                # --- 가격 ---
+                price = "가격 확인"
+                price_meta = m_soup.select_one('meta[property="product:price:amount"]')
                 if price_meta and price_meta.get("content"):
                     try:
                         price = f"{int(price_meta['content']):,}원"
                     except Exception:
                         price = price_meta.get("content")
 
-                if not price or price == "0원":
-                    price_tags = detail_soup.select('.price, .mk_price, #price, .price_val, .sale_price, td')
-                    for pt in price_tags:
-                        pt_text = pt.text.strip()
-                        m = re.search(r'([\d,]+)\s*원', pt_text)
-                        if m and m.group(1) != "0":
-                            price = f"{m.group(1)}원"
-                            break
+                if price == "가격 확인" or price == "0원":
+                    m_price = re.search(r'([\d,]+)\s*원', m_html)
+                    if m_price:
+                        price = f"{m_price.group(1)}원"
 
-                if not price:
-                    price = "가격 확인"
-
-                # --- 4. L사이즈 재고 정밀 판별 ---
-                l_instock_count = 0
+                # --- L사이즈 및 품절 여부 검사 ---
+                has_valid_l_stock = False
                 l_options_found = []
 
-                options = detail_soup.find_all("option")
+                options = m_soup.find_all("option")
                 for opt in options:
-                    opt_text = opt.text.strip()
+                    opt_text = opt.text.strip().replace('\xa0', ' ')
                     opt_val = opt.get('value', '').strip()
 
                     if not opt_text or "선택" in opt_text or opt_val in ["0", "none", ""]:
                         continue
 
-                    # L / LARGE / 100 단독 사이즈 매칭 (XL, XXL 등 오인 차단)
-                    is_l_size = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
+                    # L / LARGE / 100 단독 사이즈 매칭 (XL, XXL 오인 차단)
+                    is_l = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
 
-                    if is_l_size:
-                        combined = f"{opt_text} {opt_val}".upper()
+                    if is_l:
+                        combined = f"{opt_text} {opt_val}".upper().replace(" ", "")
                         is_sold = (
                             ("품절" in opt_text) or
                             ("SOLDOUT" in combined) or
@@ -457,26 +460,26 @@ def fetch_zabanus_l_stock(category_name, category_url):
                         )
 
                         if not is_sold:
-                            l_instock_count += 1
+                            has_valid_l_stock = True
                             l_options_found.append(opt_text)
 
-                # --- 5. 2차 강제 차단 (HTML 원문 스캔) ---
+                # --- 원문 HTML 강제 2차 검증 (Fail-Safe) ---
                 soldout_patterns = [
                     r'(?<![A-Z0-9])(?:L|LARGE|100)\s*[\-\:\(\[\_\s]*품\s*절',
                     r'품\s*절\s*[\-\:\(\[\_\s]*(?<![A-Z0-9])(?:L|LARGE|100)(?![A-Z0-9])'
                 ]
                 for pat in soldout_patterns:
-                    if re.search(pat, detail_html, re.IGNORECASE):
-                        l_instock_count = 0
+                    if re.search(pat, m_html, re.IGNORECASE):
+                        has_valid_l_stock = False
                         l_options_found = []
                         break
 
-                if l_instock_count > 0:
+                if has_valid_l_stock and l_options_found:
                     available_items.append({
                         "name": prod_name,
                         "price": price,
                         "image": img_url,
-                        "url": prod_link,
+                        "url": pc_url,
                         "available_options": ", ".join(l_options_found)
                     })
             except Exception:
