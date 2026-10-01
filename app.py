@@ -271,11 +271,11 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 순수 카테고리 메뉴 정밀 추출 및 L사이즈 재고 파싱
+# 자바나스(MakeShop) 메인 카테고리 추출 및 L사이즈 재고 파싱 (정밀 보완)
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """개별 상품명을 제외하고 자바나스의 순수 카테고리 메뉴명만 정밀 수집합니다."""
+    """하위 카테고리를 제외하고 자바나스의 최상위 메인 카테고리만 깔끔하게 중복 없이 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -293,29 +293,34 @@ def get_zavanas_categories():
             res.encoding = 'euc-kr'
             soup = BeautifulSoup(res.text, "html.parser")
             
-            # 카테고리 메뉴 영역 위주 선택
-            menu_tags = soup.select('header a, nav a, .menu a, .category a, .gnb a, #gnb a, .top_menu a, .side_menu a')
-            if not menu_tags:
-                menu_tags = soup.find_all('a', href=True)
-                
-            for a_tag in menu_tags:
-                href = a_tag.get('href', '')
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag['href']
                 name = a_tag.text.strip()
                 
+                # 하위 카테고리(mcode)가 포함된 파라미터는 제거하여 최상위 카테고리만 포함
+                if "mcode=" in href:
+                    continue
+                    
                 match = re.search(r'xcode=(\d+)', href)
                 if match and name:
                     xcode_num = match.group(1)
                     clean_name = re.sub(r'[\r\n\t]', '', name).strip()
                     
                     ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY", "SEARCH", "HOME", "SHOP", "VIEW", "DETAIL", "구매"]
-                    
-                    # 상품 모델명(예: 101, 102 로 시작하거나 15자 초과)은 카테고리에서 제외
                     is_product_title = bool(re.match(r'^\d{2,4}\s', clean_name)) or len(clean_name) > 15
                     
                     if len(clean_name) > 1 and not is_product_title and not any(w == clean_name.upper() for w in ignore_words):
                         dict_key = f"[{xcode_num.zfill(3)}] {clean_name}"
-                        if dict_key not in categories:
+                        
+                        # 동일 xcode 중 대표 카테고리 이름 하나만 남기기
+                        existing_key = next((k for k in categories if k.startswith(f"[{xcode_num.zfill(3)}]")), None)
+                        if not existing_key:
                             categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
+                        else:
+                            # 이미 있는 명칭보다 짧고 대표성을 띤 명칭으로 대체
+                            if len(clean_name) < len(existing_key.split(']', 1)[-1].strip()):
+                                del categories[existing_key]
+                                categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
         except Exception:
             pass
 
@@ -326,12 +331,12 @@ def get_zavanas_categories():
     return {
         "[001] A헤비코튼/자켓/특가": "https://zavanas.com/shop/shopbrand.html?xcode=001",
         "[002] B에센셜피마스판": "https://zavanas.com/shop/shopbrand.html?xcode=002",
-        "[003] C밸런스드수피마": "https://zavanas.com/shop/shopbrand.html?xcode=003"
+        "[021] 니트": "https://zavanas.com/shop/shopbrand.html?xcode=021"
     }
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다."""
+    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 ('- 품절' 등 정밀 판별)."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -407,17 +412,24 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not price:
                     price = "가격 확인"
 
-                # --- 4. 옵션(L사이즈) 확인 ---
+                # --- 4. 옵션(L사이즈) 품절 정밀 판별 ---
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
 
                 for opt in options:
                     opt_text = opt.text.strip()
-                    if any(size_kw in opt_text.upper() for size_kw in ["L", "LARGE", "100"]):
-                        if "[품절]" not in opt_text and "(품절)" not in opt_text and "OUT OF STOCK" not in opt_text.upper():
-                            has_l_size = True
-                            l_options_found.append(opt_text)
+                    opt_upper = opt_text.upper().replace(" ", "")
+
+                    # '품절', '- 품절', '(품절)', '[품절]', 'SOLDOUT' 등 포함 시 품절 처리
+                    is_soldout = ("품절" in opt_text) or ("SOLDOUT" in opt_upper) or ("OUTOFSTOCK" in opt_upper) or opt.has_attr('disabled')
+                    
+                    # XL, XXL 등이 L로 오인되지 않도록 단독 L / LARGE / 100 매칭
+                    is_l_size = bool(re.search(r'(?<![A-Z])(L|LARGE|100)(?![A-Z])', opt_text.upper()))
+
+                    if is_l_size and not is_soldout:
+                        has_l_size = True
+                        l_options_found.append(opt_text)
 
                 if has_l_size:
                     available_items.append({
@@ -439,7 +451,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
 # 최상위 2개 메인 탭 구성 (무신사 vs 자바나스)
 # =========================================================
 main_tab1, main_tab2 = st.tabs([
-    "🛍️ 무신사 스마트 트래커", 
+    "🛍️️ 무신사 스마트 트래커", 
     "👕 자바나스 L사이즈 재고"
 ])
 
@@ -491,7 +503,7 @@ with main_tab1:
                 with card_col2:
                     brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
                     if brand:
-                        st.caption(f"🏷️ **{brand}**")
+                        st.caption(f"🏷️️ **{brand}**")
                     st.subheader(product_info["goods_name"])
                     st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
                     
@@ -660,7 +672,7 @@ with main_tab1:
         test_input = st.text_input("테스트할 무신사 상품 URL 또는 ID", value="2081557")
         if st.button("🔍 실시간 조회"):
             if not test_input.strip():
-                st.warning("⚠️️ URL 또는 상품 ID를 입력해 주세요.")
+                st.warning("⚠️ URL 또는 상품 ID를 입력해 주세요.")
             else:
                 g_id = parse_goods_id(test_input)
                 if not g_id:
