@@ -23,27 +23,44 @@ except Exception as e:
 # 무신사 크롤링 및 데이터 추출 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
-    """공유 URL, 단축 링크, 상품 ID 등 다양한 입력값에서 숫자 ID만 추출합니다."""
+    """모바일 앱 공유 링크(onelink.me), 단축 URL, 일반 웹주소에서 진짜 상품 ID(6~8자리)를 추출합니다."""
     text = url_or_id.strip()
     
-    # 단축 링크(mss.kr 등)나 공유 URL이 입력된 경우 실제 URL로 리다이렉트 추적
+    # 1. URL이 들어온 경우 실제 웹페이지 주소로 끝까지 추적 (onelink.me 등 처리)
     if text.startswith("http"):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         try:
-            res = requests.head(text, allow_redirects=True, timeout=5)
-            text = res.url
+            res = requests.get(text, headers=headers, allow_redirects=True, timeout=5)
+            text = res.url  # 최종 이동된 무신사 웹 URL
+            
+            # 페이지 본문에서 canonical 링크 또는 products/goods ID 탐색
+            match_body = re.search(r'musinsa\.com/(?:app/goods|products)/(\d+)', res.text)
+            if match_body:
+                return match_body.group(1)
         except Exception:
             pass
 
-    # 1. goods/숫자 또는 products/숫자 패턴 추출
+    # 2. /goods/숫자 또는 /products/숫자 패턴 우선 추출
     match = re.search(r'(?:goods|products)/(\d+)', text)
     if match:
         return match.group(1)
-    
-    # 2. URL/문자열 내에서 가장 길게 포함된 숫자열(상품 ID) 추출
-    digits = re.findall(r'\d+', text)
+
+    # 3. 무신사 상품 ID 스펙인 5~8자리 연속 숫자만 추출 (94 같은 2자리 노이즈 숫자 무시)
+    digits = re.findall(r'\b\d{5,8}\b', text)
     if digits:
-        return max(digits, key=len)
+        return digits[0]
+
+    # 4. 예외 케이스: 가장 긴 숫자열 (4자리 이상)
+    all_digits = re.findall(r'\d+', text)
+    if all_digits:
+        longest = max(all_digits, key=len)
+        if len(longest) >= 4:
+            return longest
+
     return None
+
 
 def get_musinsa_goods_info(goods_id):
     """무신사 상품 페이지에서 상세 정보를 수집합니다."""
