@@ -11,49 +11,65 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 3열(3개씩) 카드 그리드 강제 유지 CSS
+# 모바일 3열/2열 전용 스마트 CSS (글자 겹침 및 세로 꺾임 완전 방지)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
-/* 모바일 화면 3열 카드 그리드 레이아웃 오버라이드 */
-@media screen and (max-width: 768px) {
-    div[data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: wrap !important;
-        gap: 4px !important;
-        width: 100% !important;
-    }
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-        width: calc(33.333% - 3px) !important;
-        flex: 0 0 calc(33.333% - 3px) !important;
-        min-width: calc(33.333% - 3px) !important;
-        max-width: calc(33.333% - 3px) !important;
-        box-sizing: border-box !important;
-    }
-}
-
-/* 스마트폰 여백 및 스크롤 패딩 최적화 */
+/* 여백 및 패딩 최적화 */
 .main .block-container {
     padding-left: 0.2rem !important;
     padding-right: 0.2rem !important;
-    padding-top: 0.8rem !important;
+    padding-top: 0.6rem !important;
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
 
-/* 카드 내부 요소 간격 보정 */
+/* 3열 컬럼 모바일 가로 유지 (세로 꺾임 방지) */
+div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(3)) {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 4px !important;
+    width: 100% !important;
+}
+
+div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(3)) > div[data-testid="column"] {
+    width: calc(33.333% - 3px) !important;
+    flex: 0 0 calc(33.333% - 3px) !important;
+    min-width: calc(33.333% - 3px) !important;
+    max-width: calc(33.333% - 3px) !important;
+    box-sizing: border-box !important;
+}
+
+/* 2열 컬럼 모바일 가로 유지 */
+div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(2)):not(:has(> div[data-testid="column"]:nth-child(3))) {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    width: 100% !important;
+}
+
+div[data-testid="stHorizontalBlock"]:has(> div[data-testid="column"]:nth-child(2)):not(:has(> div[data-testid="column"]:nth-child(3))) > div[data-testid="column"] {
+    width: calc(50% - 3px) !important;
+    flex: 0 0 calc(50% - 3px) !important;
+    min-width: calc(50% - 3px) !important;
+    max-width: calc(50% - 3px) !important;
+    box-sizing: border-box !important;
+}
+
+/* 카드 간격 및 초슬림 버튼 정의 */
 div[data-testid="stVerticalBlock"] {
     gap: 2px !important;
 }
 
-/* 초슬림 버튼/팝오버 스타일 */
 .stButton > button, div[data-testid="stPopover"] > button {
-    font-size: 10px !important;
-    padding: 1px 2px !important;
-    height: 24px !important;
-    min-height: 24px !important;
-    line-height: 1.1 !important;
+    font-size: 11px !important;
+    padding: 2px 4px !important;
+    height: 26px !important;
+    min-height: 26px !important;
+    line-height: 1.2 !important;
+    width: 100% !important;
 }
 
 p, span, div, h1, h2, h3, h4 {
@@ -441,7 +457,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 3개씩 고정 카드)
+    # SUB TAB 2: 무신사 추적 상품 관리 (모바일 3열 3개 고정 카드)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -522,7 +538,6 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
-                # 모바일 화면에도 한 줄에 3개씩 배치 (3열 그리드)
                 items_list = list(filtered_tracked.iterrows())
                 for i in range(0, len(items_list), 3):
                     cols = st.columns(3)
@@ -531,14 +546,12 @@ with main_tab1:
                             _, row = items_list[i + j]
                             with cols[j]:
                                 with st.container(border=True):
-                                    # 1. 브랜드 & 상품명
-                                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
-                                    if brand:
-                                        st.caption(f"**{brand}**")
-                                    st.markdown(f"<div style='font-size:11px; font-weight:bold; line-height:1.2; min-height:26px; margin-bottom:4px;'>{row['goods_name']}</div>", unsafe_allow_html=True)
+                                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
+                                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
 
-                                    # 2. 가격 및 할인율
                                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
+                                    
+                                    price_html_str = "가격 수집 중"
                                     if not p_logs.empty:
                                         latest_p = p_logs.iloc[-1]
                                         c_price = int(latest_p['price'])
@@ -546,34 +559,46 @@ with main_tab1:
                                         disc = latest_p.get('discount_rate', 0)
 
                                         if n_price > c_price and disc > 0:
-                                            st.markdown(f"<div style='margin-bottom:2px;'><span style='color:#d9480f; font-weight:bold; font-size:11px;'>{disc}%</span> <b style='font-size:12px; margin-left:1px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
+                                            price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
                                         else:
-                                            st.markdown(f"<div style='margin-bottom:2px;'><b style='font-size:12px;'>{c_price:,}원</b></div>", unsafe_allow_html=True)
-                                    else:
-                                        st.caption("가격 수집 중")
+                                            price_html_str = f"{c_price:,}원"
 
-                                    # 3. 태그
-                                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "-"
-                                    st.markdown(f"<div style='font-size:10px; color:#495057; margin-bottom:4px;'>🏷️ {curr_tag}</div>", unsafe_allow_html=True)
+                                    # 텍스트 오버랩 방지 통합 HTML 블록
+                                    card_html = f"""
+                                    <div style="padding: 2px 0;">
+                                        <div style="font-size: 10px; color: #868e96; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                            {brand}
+                                        </div>
+                                        <div style="font-size: 11px; font-weight: bold; color: #212529; line-height: 1.25; height: 28px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; margin: 2px 0 4px 0;">
+                                            {row['goods_name']}
+                                        </div>
+                                        <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                            {price_html_str}
+                                        </div>
+                                        <div style="font-size: 10px; color: #2b8a3e; background: #e6fcf5; display: inline-block; padding: 1px 4px; border-radius: 3px; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">
+                                            🏷️ {curr_tag}
+                                        </div>
+                                    </div>
+                                    """
+                                    st.markdown(card_html, unsafe_allow_html=True)
 
-                                    # 4. 수정 / 삭제 버튼
-                                    btn_c1, btn_c2 = st.columns(2)
-                                    with btn_c1:
-                                        with st.popover("✏️태그", use_container_width=True):
-                                            with st.form(key=f"edit_tag_m_{row['goods_id']}"):
-                                                edit_tag_val = st.text_input(
-                                                    "태그 수정", 
-                                                    value=row.get("tags") if pd.notna(row.get("tags")) else "", 
-                                                    placeholder="예: #상의"
-                                                )
-                                                if st.form_submit_button("저장", use_container_width=True):
-                                                    supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
-                                                    st.toast("✅ 태그가 수정되었습니다!", icon="🎉")
-                                                    time.sleep(0.3)
-                                                    st.rerun()
-
-                                    with btn_c2:
-                                        if st.button("🗑️삭제", key=f"del_m_{row['goods_id']}", use_container_width=True):
+                                    # 통합 ⚙️ 관리 팝업 (태그 수정 + 삭제)
+                                    with st.popover("⚙️ 관리", use_container_width=True):
+                                        st.caption(f"**[{brand}] {row['goods_name']}**")
+                                        st.divider()
+                                        with st.form(key=f"edit_tag_m_{row['goods_id']}"):
+                                            edit_tag_val = st.text_input(
+                                                "태그 수정", 
+                                                value=row.get("tags") if pd.notna(row.get("tags")) else "", 
+                                                placeholder="예: #상의"
+                                            )
+                                            if st.form_submit_button("저장", use_container_width=True):
+                                                supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
+                                                st.toast("✅ 태그가 수정되었습니다!", icon="🎉")
+                                                time.sleep(0.3)
+                                                st.rerun()
+                                        
+                                        if st.button("🗑️ 상품 삭제", key=f"del_m_{row['goods_id']}", use_container_width=True):
                                             supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
                                             st.success("삭제되었습니다.")
                                             st.rerun()
@@ -667,7 +692,7 @@ with main_tab2:
                             labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
                         )
                         fig_tag.update_traces(
-                            marker=dict(size=10),
+                            marker=dict(size=8),
                             hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
                         )
                         fig_tag.update_xaxes(type='category')
@@ -677,14 +702,14 @@ with main_tab2:
                             ticksuffix="원"
                         )
                         fig_tag.update_layout(
-                            margin=dict(l=10, r=10, t=10, b=10),
+                            margin=dict(l=10, r=10, t=20, b=80),
                             legend=dict(
                                 orientation="h",
                                 yanchor="top",
                                 y=-0.25,
                                 xanchor="left",
                                 x=0,
-                                font=dict(size=11)
+                                font=dict(size=10)
                             )
                         )
                         st.plotly_chart(fig_tag, use_container_width=True)
