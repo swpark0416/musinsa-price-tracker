@@ -448,7 +448,6 @@ def fetch_zabanus_l_stock(category_name, category_url):
 
                 # --- 상품명 정밀 파싱 ---
                 prod_name = ""
-                # PC 타이틀 태그 우선
                 pc_title = pc_soup.select_one('title')
                 if pc_title and pc_title.text:
                     t = pc_title.text.strip()
@@ -493,13 +492,12 @@ def fetch_zabanus_l_stock(category_name, category_url):
                         price = f"{p_val:,}원"
 
                 if price == "가격 확인":
-                    # 메이크샵 가격 전용 태그 파싱
                     price_elem = pc_soup.select_one('.price_info, .price, .mk_price, #price, .price_val, .sale_price')
                     if price_elem:
                         m_p = re.search(r'([\d,]+)\s*원', price_elem.text)
                         if m_p:
                             p_val = int(m_p.group(1).replace(',', ''))
-                            if 5000 <= p_val <= 500000:  # 의류 가격 정상 범위
+                            if 5000 <= p_val <= 500000:
                                 price = f"{p_val:,}원"
 
                 if price == "가격 확인":
@@ -543,7 +541,7 @@ with main_tab1:
     ])
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 가격 추이 대시보드
+    # SUB TAB 1: 무신사 가격 추이 대시보드 (태그 필터 및 그룹 그래프 반영)
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
@@ -558,19 +556,70 @@ with main_tab1:
         if products_df.empty:
             st.info("아직 추적 중인 상품이 없습니다. '➕ 추적 상품 관리' 탭에서 상품을 추가해 보세요!")
         else:
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                categories = ["전체"] + list(products_df["category"].dropna().unique())
-                selected_cat = st.selectbox("📂 카테고리 필터", categories)
+            col_f1, col_f2, col_f3 = st.columns(3)
             
-            filtered_products = products_df if selected_cat == "전체" else products_df[products_df["category"] == selected_cat]
+            with col_f1:
+                categories = ["전체"] + sorted(list(products_df["category"].dropna().unique()))
+                selected_cat = st.selectbox("📂 카테고리 필터", categories)
+
+            # --- 태그 목록 추출 ---
+            tag_options = ["전체"]
+            if "tags" in products_df.columns:
+                extracted_tags = set()
+                for t_str in products_df["tags"].dropna():
+                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
+                    for p in parts:
+                        extracted_tags.add(p if p.startswith('#') else f"#{p}")
+                tag_options += sorted(list(extracted_tags))
+
+            with col_f2:
+                selected_tag = st.selectbox("🏷️ 태그 필터 (예: #상의)", tag_options)
+
+            # --- 카테고리 및 태그 1차 필터링 ---
+            filtered_products = products_df.copy()
+            if selected_cat != "전체":
+                filtered_products = filtered_products[filtered_products["category"] == selected_cat]
+            if selected_tag != "전체":
+                clean_tag = selected_tag.lstrip('#')
+                filtered_products = filtered_products[
+                    filtered_products["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
+                ]
 
             if filtered_products.empty:
-                st.warning("해당 카테고리에 등록된 상품이 없습니다.")
+                st.warning("조건에 부합하는 등록된 상품이 없습니다.")
             else:
-                with col_f2:
-                    selected_goods_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["goods_name"].unique())
+                with col_f3:
+                    selected_goods_name = st.selectbox("🛍 상세 조회할 상품 선택", filtered_products["goods_name"].unique())
 
+                # --- 🏷️ 태그 선택 시 태그별 상품 전체 가격 비교 그래프 출력 ---
+                if selected_tag != "전체" and len(filtered_products) > 0 and not logs_df.empty:
+                    st.markdown(f"### 🏷️ **{selected_tag}** 태그 그룹 가격 변동 비교")
+                    tag_goods_ids = filtered_products["goods_id"].tolist()
+                    tag_logs = logs_df[logs_df["goods_id"].isin(tag_goods_ids)].copy()
+
+                    if not tag_logs.empty:
+                        tag_logs = tag_logs.merge(filtered_products[["goods_id", "goods_name", "brand_name"]], on="goods_id", how="left")
+                        tag_logs["display_name"] = tag_logs.apply(
+                            lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r['brand_name']) and r['brand_name'] else r['goods_name'],
+                            axis=1
+                        )
+
+                        fig_tag_group = px.line(
+                            tag_logs,
+                            x="created_at",
+                            y="price",
+                            color="display_name",
+                            markers=True,
+                            labels={"created_at": "날짜", "price": "판매가(원)", "display_name": "상품명"}
+                        )
+                        fig_tag_group.update_traces(
+                            hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x|%Y-%m-%d}<br>판매가: %{y:,}원<extra></extra>"
+                        )
+                        fig_tag_group.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
+                        st.plotly_chart(fig_tag_group, use_container_width=True)
+                        st.divider()
+
+                # --- 개별 상품 상세 정보 카드 ---
                 product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
                 g_id = product_info["goods_id"]
 
@@ -608,8 +657,9 @@ with main_tab1:
 
                 st.divider()
 
+                # --- 개별 상품 가격 및 할인율 차트 ---
                 if not product_logs.empty:
-                    st.markdown("### 📈 가격 및 할인율 변동 추이")
+                    st.markdown("### 📈 상품 단독 가격 및 할인율 추이")
                     
                     min_p = int(product_logs["price"].min())
                     max_p = int(product_logs["price"].max())
@@ -665,15 +715,16 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리
+    # SUB TAB 2: 무신사 추적 상품 관리 (등록 시 입력칸 자동 비우기 적용)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
         st.caption("무신사 상품 URL 또는 ID를 입력하면 수집 대상에 추가되고 초기 데이터가 저장됩니다.")
 
-        with st.form("add_product_form"):
+        # clear_on_submit=True 적용으로 등록 완료 시 입력창 자동 초기화
+        with st.form("add_product_form", clear_on_submit=True):
             input_url = st.text_input("무신사 상품 URL 또는 ID", placeholder="예: https://www.musinsa.com/app/goods/2081557 또는 2081557")
-            input_tags = st.text_input("커스텀 태그 (선택)", placeholder="예: #봄아우터, #위시리스트")
+            input_tags = st.text_input("커스텀 태그 (선택)", placeholder="예: #상의, #위시리스트")
             submit_button = st.form_submit_button("추적 등록하기")
 
         if submit_button:
