@@ -221,7 +221,7 @@ def load_price_logs():
         df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
         df = df.dropna(subset=["created_at"])
         
-        # KST 시간 변환 후 YYYY-MM-DD 날짜 전용 문자열 생성 (시간 제거)
+        # KST 시간 변환 후 YYYY-MM-DD 날짜 전용 문자열 생성
         df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
         df["date_str"] = df["created_at_kst"].dt.strftime("%Y-%m-%d")
         
@@ -273,7 +273,7 @@ def sync_today_prices_if_needed(products_df):
 # =========================================================
 main_tab1, main_tab2 = st.tabs([
     "🛍 무신사 스마트 트래커", 
-    "🏷️ 태그별 가격 비교"
+    "🏷️️ 태그별 가격 비교"
 ])
 
 # =========================================================
@@ -287,7 +287,7 @@ with main_tab1:
     ])
 
     # -----------------------------------------------------
-    # SUB TAB 1: 개별 상품 가격 추이 대시보드 (태그 기반 구분)
+    # SUB TAB 1: 개별 상품 가격 추이 대시보드
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
@@ -371,7 +371,6 @@ with main_tab1:
                 if not product_logs.empty:
                     st.markdown("### 📈 가격 및 할인율 변동 추이")
                     
-                    # Y축 여백 자동 정밀 세팅
                     p_min = int(product_logs["price"].min())
                     p_max = int(product_logs["price"].max())
                     p_pad = max(5000, int((p_max - p_min) * 0.2)) if p_max != p_min else 10000
@@ -423,7 +422,7 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (태그 수정 기능 추가)
+    # SUB TAB 2: 무신사 추적 상품 관리 (태그 필터 + 카드형 레이아웃)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -477,42 +476,91 @@ with main_tab1:
 
         st.divider()
 
+        # -------------------------------------------------
+        # 추적 상품 목록 태그 필터 + 3열 격자(Grid) 카드
+        # -------------------------------------------------
         st.subheader("📋 현재 추적 중인 상품 목록")
         tracked_df = load_tracked_products()
+        logs_df = load_price_logs()
 
-        if not tracked_df.empty:
-            for idx, row in tracked_df.iterrows():
-                col_img, col_desc, col_del = st.columns([1, 4, 1])
-                with col_img:
-                    render_image(row.get("image_url"), width=80)
-                with col_desc:
-                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
-                    title_str = f"**[{brand}] {row['goods_name']}**" if brand else f"**{row['goods_name']}**"
-                    st.markdown(f"{title_str} (ID: `{row['goods_id']}`)")
-                    
-                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "없음"
-                    st.caption(f"🏷️ 현재 태그: `{curr_tag}`")
+        if tracked_df.empty:
+            st.info("등록된 추적 상품이 없습니다.")
+        else:
+            # 태그 필터 옵션 추출
+            manage_tag_options = ["전체"]
+            if "tags" in tracked_df.columns:
+                extracted_tags = set()
+                for t_str in tracked_df["tags"].dropna():
+                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
+                    for p in parts:
+                        tag_name = p if p.startswith('#') else f"#{p}"
+                        extracted_tags.add(tag_name)
+                manage_tag_options += sorted(list(extracted_tags))
 
-                    # 태그 수정 팝오버 폼
-                    with st.popover("✏️ 태그 수정"):
-                        with st.form(key=f"edit_tag_form_{row['goods_id']}"):
-                            edit_tag_val = st.text_input(
-                                "새 태그 입력", 
-                                value=row.get("tags") if pd.notna(row.get("tags")) else "", 
-                                placeholder="예: #상의, #위시리스트"
-                            )
-                            if st.form_submit_button("저장"):
-                                supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
-                                st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
-                                time.sleep(0.3)
-                                st.rerun()
+            selected_manage_tag = st.selectbox("🏷️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
 
-                with col_del:
-                    if st.button("🗑 삭제", key=f"del_{row['goods_id']}"):
-                        supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
-                        st.success("삭제되었습니다.")
-                        st.rerun()
-                st.divider()
+            filtered_tracked = tracked_df.copy()
+            if selected_manage_tag != "전체":
+                clean_tag = selected_manage_tag.lstrip('#')
+                filtered_tracked = filtered_tracked[
+                    filtered_tracked["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
+                ]
+
+            if filtered_tracked.empty:
+                st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
+            else:
+                cols = st.columns(3)
+                for idx, (_, row) in enumerate(filtered_tracked.iterrows()):
+                    with cols[idx % 3]:
+                        with st.container(border=True):
+                            # 1. 사진
+                            render_image(row.get("image_url"), use_container_width=True)
+
+                            # 2. 브랜드명 & 상품명
+                            brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
+                            if brand:
+                                st.caption(f"**{brand}**")
+                            st.markdown(f"**{row['goods_name']}**")
+
+                            # 3. 가격 & 할인율
+                            p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
+                            if not p_logs.empty:
+                                latest_p = p_logs.iloc[-1]
+                                c_price = int(latest_p['price'])
+                                n_price = int(latest_p['normal_price'])
+                                disc = latest_p.get('discount_rate', 0)
+
+                                if n_price > c_price and disc > 0:
+                                    st.markdown(f"<span style='color:#d9480f; font-weight:bold; font-size:15px;'>{disc}%</span> <b style='font-size:16px;'>{c_price:,}원</b>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"<b style='font-size:16px;'>{c_price:,}원</b>", unsafe_allow_html=True)
+                            else:
+                                st.caption("가격 정보 수집 중")
+
+                            # 4. 태그 및 액션 버튼
+                            curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "-"
+                            st.caption(f"🏷️ `{curr_tag}`")
+
+                            btn_col1, btn_col2 = st.columns(2)
+                            with btn_col1:
+                                with st.popover("✏️ 태그", use_container_width=True):
+                                    with st.form(key=f"edit_tag_grid_{row['goods_id']}"):
+                                        edit_tag_val = st.text_input(
+                                            "태그 수정", 
+                                            value=row.get("tags") if pd.notna(row.get("tags")) else "", 
+                                            placeholder="예: #상의"
+                                        )
+                                        if st.form_submit_button("저장", use_container_width=True):
+                                            supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
+                                            st.toast("✅ 태그가 수정되었습니다!", icon="🎉")
+                                            time.sleep(0.3)
+                                            st.rerun()
+
+                            with btn_col2:
+                                if st.button("🗑️ 삭제", key=f"del_grid_{row['goods_id']}", use_container_width=True):
+                                    supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
+                                    st.success("삭제되었습니다.")
+                                    st.rerun()
 
     # -----------------------------------------------------
     # SUB TAB 3: 무신사 실시간 조회 (테스트)
