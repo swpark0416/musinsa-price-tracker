@@ -190,7 +190,9 @@ def load_price_logs():
     res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
     df = pd.DataFrame(res.data)
     if not df.empty:
-        df["created_at"] = pd.to_datetime(df["created_at"]).dt.strftime('%Y-%m-%d %H:%M')
+        # X축 날짜 축적용: datetime 파싱
+        df["created_at"] = pd.to_datetime(df["created_at"])
+        
         df["discount_rate"] = df.apply(
             lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
             if r["normal_price"] > r["price"] else 0, axis=1
@@ -223,7 +225,7 @@ with tab1:
             st.warning("해당 카테고리에 등록된 상품이 없습니다.")
         else:
             with col_f2:
-                selected_goods_name = st.selectbox("🛍️️ 조회할 상품 선택", filtered_products["goods_name"].unique())
+                selected_goods_name = st.selectbox("🛍️ 조회할 상품 선택", filtered_products["goods_name"].unique())
 
             product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
             g_id = product_info["goods_id"]
@@ -254,15 +256,42 @@ with tab1:
 
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
+                
+                # 1. 판매가 변동 추이 (원화 정수 단위, 깔끔한 그리드 정렬)
                 fig_price = px.line(
-                    product_logs, x="created_at", y="price", 
-                    title="판매가 변동 추이 (원)", markers=True
+                    product_logs, 
+                    x="created_at", 
+                    y="price", 
+                    title="판매가 변동 추이 (원)", 
+                    markers=True,
+                    labels={"created_at": "날짜", "price": "판매가 (원)"}
+                )
+                fig_price.update_xaxes(
+                    dtick="D1",                  # 일(Day) 단위 격자
+                    tickformat="%Y-%m-%d"        # YYYY-MM-DD 날짜 포맷
+                )
+                fig_price.update_yaxes(
+                    tickformat=",d",             # 천 단위 콤마(,) 및 정수 표기 (예: 68,400)
+                    ticksuffix="원",              # 숫자 뒤 '원' 붙이기
+                    nticks=6                     # 깔끔하게 떨어지는 5~6개 수평 그리드 눈금 자동 정렬
                 )
                 st.plotly_chart(fig_price, use_container_width=True)
 
+                # 2. 할인율 변동 추이 (%)
                 fig_discount = px.bar(
-                    product_logs, x="created_at", y="discount_rate", 
-                    title="할인율 변동 추이 (%)", text_auto=True
+                    product_logs, 
+                    x="created_at", 
+                    y="discount_rate", 
+                    title="할인율 변동 추이 (%)", 
+                    text_auto=True,
+                    labels={"created_at": "날짜", "discount_rate": "할인율 (%)"}
+                )
+                fig_discount.update_xaxes(
+                    dtick="D1",
+                    tickformat="%Y-%m-%d"
+                )
+                fig_discount.update_yaxes(
+                    ticksuffix="%"
                 )
                 st.plotly_chart(fig_discount, use_container_width=True)
             else:
