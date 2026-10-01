@@ -6,10 +6,11 @@ import requests
 import json
 import re
 import time
+from bs4 import BeautifulSoup
 
 # 페이지 기본 설정
-st.set_page_config(page_title="무신사 스마트 가격 트래커", page_icon="🛍️", layout="wide")
-st.title("🛍️ 무신사 스마트 가격 트래커")
+st.set_page_config(page_title="무신사 & 자바나스 스마트 트래커", page_icon="🛍️", layout="wide")
+st.title("🛍️ 무신사 & 자바나스 스마트 트래커")
 
 # Supabase 연결 설정 (Secrets 사용)
 try:
@@ -71,7 +72,7 @@ def parse_goods_id(url_or_id):
     return None
 
 def extract_brand_name(raw_text, data=None):
-    """JSON 및 HTML 구조 전체를 탐색하여 실제 브랜드명(예: 드로우핏)을 정밀 추출합니다."""
+    """JSON 및 HTML 구조 전체를 탐색하여 실제 브랜드명을 정밀 추출합니다."""
     if data and isinstance(data, dict):
         b_info = data.get("brand") or data.get("brandInfo") or data.get("brandSub")
         if isinstance(b_info, dict):
@@ -118,12 +119,10 @@ def get_musinsa_goods_info(goods_id):
     ]
 
     session = requests.Session()
-    last_status = None
 
     for url in endpoints:
         try:
             res = session.get(url, headers=headers, timeout=8)
-            last_status = res.status_code
 
             if res.status_code == 200:
                 raw_text = res.text
@@ -236,9 +235,7 @@ def load_price_logs():
         )
     return df
 
-# ---------------------------------------------------------
-# 🔥 [방법 3] 앱 접속 시 오늘 가격 자동 동기화 함수
-# ---------------------------------------------------------
+# 앱 접속 시 오늘 가격 자동 동기화 함수
 def sync_today_prices_if_needed(products_df):
     """오늘 날짜의 가격 데이터가 누락된 추적 상품을 앱 접속 시 자동으로 실시간 수집합니다."""
     if products_df.empty:
@@ -247,14 +244,12 @@ def sync_today_prices_if_needed(products_df):
     today_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     
     try:
-        # 오늘(한국시간) 00:00 이후에 등록된 로그가 있는 상품 ID 조회
         today_start = f"{today_str}T00:00:00Z"
         res = supabase.table("price_logs").select("goods_id").gte("created_at", today_start).execute()
         synced_goods_ids = set([row["goods_id"] for row in res.data]) if res.data else set()
     except Exception:
         synced_goods_ids = set()
 
-    # 오늘 수집되지 않은 상품 필터링
     unsynced_products = products_df[~products_df["goods_id"].isin(synced_goods_ids)]
     
     if not unsynced_products.empty:
@@ -279,9 +274,86 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 탭 구성
+# 자바나스 재고 크롤링 함수 (30분 캐싱)
 # ---------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(["📊 가격 추이 대시보드", "➕ 추적 상품 관리", "⚡ 실시간 조회 (테스트)"])
+ZABANUS_CATEGORIES = {
+    "티셔츠/탑": "https://www.zabanus.com/category/top/24/",
+    "니트/가디건": "https://www.zabanus.com/category/knit/25/",
+    "아우터": "https://www.zabanus.com/category/outer/26/",
+    "팬츠": "https://www.zabanus.com/category/pants/27/"
+}
+
+@st.cache_data(ttl=1800)
+def fetch_zabanus_l_stock(category_name, category_url):
+    """자바나스 카테고리 페이지를 순회하며 L사이즈가 남아있는 상품을 파싱합니다."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    available_items = []
+    try:
+        res = requests.get(category_url, headers=headers, timeout=8)
+        if res.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        products = soup.select(".prdList > li, .xans-product-listnormal > ul > li")
+
+        for prod in products:
+            link_tag = prod.select_one(".name a, .description .name a")
+            if not link_tag or 'href' not in link_tag.attrs:
+                continue
+
+            prod_name = link_tag.text.strip()
+            prod_link = "https://www.zabanus.com" + link_tag['href'] if link_tag['href'].startswith("/") else link_tag['href']
+            
+            img_tag = prod.select_one(".thumbnail img, .prdImg img")
+            img_url = "https:" + img_tag['src'] if img_tag and img_tag.get('src', '').startswith("//") else (img_tag.get('src') if img_tag else "")
+
+            price_tag = prod.select_one(".description ul li:nth-child(2) span, .price")
+            price = price_tag.text.strip() if price_tag else "가격 확인 필요"
+
+            try:
+                detail_res = requests.get(prod_link, headers=headers, timeout=5)
+                detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+                
+                options = detail_soup.select("select.ProductOption0 option, select[option_title] option")
+                
+                has_l_size = False
+                l_options_found = []
+
+                for opt in options:
+                    opt_text = opt.text.strip()
+                    if any(size_kw in opt_text.upper() for size_kw in ["L", "LARGE", "100"]):
+                        if "[품절]" not in opt_text and "(품절)" not in opt_text and "OUT OF STOCK" not in opt_text.upper():
+                            has_l_size = True
+                            l_options_found.append(opt_text)
+
+                if has_l_size:
+                    available_items.append({
+                        "name": prod_name,
+                        "price": price,
+                        "image": img_url,
+                        "url": prod_link,
+                        "available_options": ", ".join(l_options_found)
+                    })
+            except Exception:
+                continue
+
+    except Exception as e:
+        st.error(f"수집 중 오류 발생 ({category_name}): {e}")
+
+    return available_items
+
+# ---------------------------------------------------------
+# 탭 구성 (총 4개 탭)
+# ---------------------------------------------------------
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 가격 추이 대시보드", 
+    "➕ 추적 상품 관리", 
+    "⚡ 실시간 조회 (테스트)",
+    "👕 자바나스 L사이즈 재고"
+])
 
 # =========================================================
 # TAB 1: 가격 추이 대시보드
@@ -289,7 +361,6 @@ tab1, tab2, tab3 = st.tabs(["📊 가격 추이 대시보드", "➕ 추적 상�
 with tab1:
     products_df = load_tracked_products()
 
-    # 앱 접속 후 세션당 1회만 오늘 자 가격 자동 동기화 수행
     if "today_synced" not in st.session_state and not products_df.empty:
         with st.spinner("🔄 최신 가격 정보를 자동으로 확인하는 중..."):
             sync_today_prices_if_needed(products_df)
@@ -353,7 +424,6 @@ with tab1:
             if not product_logs.empty:
                 st.markdown("### 📈 가격 및 할인율 변동 추이")
                 
-                # 1. 판매가 변동 추이 (1만원 그리드, 정수 원화 툴팁)
                 min_p = int(product_logs["price"].min())
                 max_p = int(product_logs["price"].max())
 
@@ -378,19 +448,10 @@ with tab1:
                 fig_price.update_traces(
                     hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>판매가:</b> %{y:,}원<extra></extra>"
                 )
-                fig_price.update_xaxes(
-                    dtick="D1",
-                    tickformat="%Y-%m-%d"
-                )
-                fig_price.update_yaxes(
-                    tickmode="array",
-                    tickvals=tick_vals,
-                    ticktext=tick_texts,
-                    range=[y_min, y_max]
-                )
+                fig_price.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
+                fig_price.update_yaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_texts, range=[y_min, y_max])
                 st.plotly_chart(fig_price, use_container_width=True)
 
-                # 2. 할인율 변동 추이 (5% 간격)
                 min_d = product_logs["discount_rate"].min()
                 max_d = product_logs["discount_rate"].max()
 
@@ -410,15 +471,8 @@ with tab1:
                 fig_discount.update_traces(
                     hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>할인율:</b> %{y}%<extra></extra>"
                 )
-                fig_discount.update_xaxes(
-                    dtick="D1",
-                    tickformat="%Y-%m-%d"
-                )
-                fig_discount.update_yaxes(
-                    dtick=5,
-                    range=[d_min, d_max],
-                    ticksuffix="%"
-                )
+                fig_discount.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
+                fig_discount.update_yaxes(dtick=5, range=[d_min, d_max], ticksuffix="%")
                 st.plotly_chart(fig_discount, use_container_width=True)
             else:
                 st.info("아직 누적된 가격 로그 데이터가 없습니다.")
@@ -492,7 +546,7 @@ with tab2:
                 st.markdown(f"{title_str} (ID: `{row['goods_id']}`)")
                 st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
             with col_del:
-                if st.button("🗑️ 삭제", key=f"del_{row['goods_id']}"):
+                if st.button("🗑️️ 삭제", key=f"del_{row['goods_id']}"):
                     supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
                     st.success("삭제되었습니다.")
                     st.rerun()
@@ -531,3 +585,40 @@ with tab3:
                             st.markdown(f"👉 [페이지 열기]({live['url']})")
                     else:
                         st.error("🚨 실시간 가격 조회에 실패했습니다.")
+
+# =========================================================
+# TAB 4: 자바나스 L사이즈 실시간 재고 탐색기
+# =========================================================
+with tab4:
+    st.subheader("👕 자바나스(ZABANUS) L사이즈 잔여 재고 현황")
+    st.caption("현재 자바나스 공식몰에서 **L(또는 Large/100) 사이즈 구매가 가능한 상품만** 카테고리별로 모아봅니다.")
+
+    col_cat, col_btn = st.columns([3, 1])
+    with col_cat:
+        selected_cat_name = st.selectbox("📂 카테고리 선택", list(ZABANUS_CATEGORIES.keys()))
+    with col_btn:
+        st.write(" ") # 레이아웃 정렬용
+        if st.button("🔄 실시간 재고 새로고침"):
+            st.cache_data.clear()
+            st.rerun()
+
+    cat_url = ZABANUS_CATEGORIES[selected_cat_name]
+
+    with st.spinner(f"'{selected_cat_name}' 카테고리에서 L사이즈 재고 탐색 중..."):
+        l_products = fetch_zabanus_l_stock(selected_cat_name, cat_url)
+
+    if not l_products:
+        st.info(f"현재 **{selected_cat_name}** 카테고리에 L사이즈 재고가 남아있는 상품이 없거나 수집 중입니다.")
+    else:
+        st.success(f"총 **{len(l_products)}개**의 상품에서 L사이즈 구매가 가능합니다!")
+        
+        cols = st.columns(3)
+        for idx, item in enumerate(l_products):
+            with cols[idx % 3]:
+                with st.container(border=True):
+                    if item["image"]:
+                        st.image(item["image"], use_container_width=True)
+                    st.markdown(f"**{item['name']}**")
+                    st.caption(f"💰 가격: {item['price']}")
+                    st.caption(f"✅ 남은 옵션: `{item['available_options']}`")
+                    st.markdown(f"👉 [자바나스에서 바로 구매]({item['url']})")
