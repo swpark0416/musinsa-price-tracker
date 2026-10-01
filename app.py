@@ -271,11 +271,11 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 정밀 자동 카테고리 수집 및 L사이즈 재고 파싱
+# 자바나스(MakeShop) 순수 카테고리 메뉴 정밀 추출 및 L사이즈 재고 파싱
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """PC 헤더를 사용하여 자바나스의 전체 xcode(카테고리 번호) 및 이름을 정밀 수집하고 번호순 정렬합니다."""
+    """개별 상품명을 제외하고 자바나스의 순수 카테고리 메뉴명만 정밀 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -293,8 +293,13 @@ def get_zavanas_categories():
             res.encoding = 'euc-kr'
             soup = BeautifulSoup(res.text, "html.parser")
             
-            for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href']
+            # 카테고리 메뉴 영역 위주 선택
+            menu_tags = soup.select('header a, nav a, .menu a, .category a, .gnb a, #gnb a, .top_menu a, .side_menu a')
+            if not menu_tags:
+                menu_tags = soup.find_all('a', href=True)
+                
+            for a_tag in menu_tags:
+                href = a_tag.get('href', '')
                 name = a_tag.text.strip()
                 
                 match = re.search(r'xcode=(\d+)', href)
@@ -302,8 +307,12 @@ def get_zavanas_categories():
                     xcode_num = match.group(1)
                     clean_name = re.sub(r'[\r\n\t]', '', name).strip()
                     
-                    ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY", "SEARCH", "HOME", "SHOP"]
-                    if len(clean_name) > 1 and not any(w == clean_name.upper() for w in ignore_words):
+                    ignore_words = ["BEST", "NEW", "MORE", "LOGIN", "JOIN", "MYPAGE", "CART", "COMMUNITY", "SEARCH", "HOME", "SHOP", "VIEW", "DETAIL", "구매"]
+                    
+                    # 상품 모델명(예: 101, 102 로 시작하거나 15자 초과)은 카테고리에서 제외
+                    is_product_title = bool(re.match(r'^\d{2,4}\s', clean_name)) or len(clean_name) > 15
+                    
+                    if len(clean_name) > 1 and not is_product_title and not any(w == clean_name.upper() for w in ignore_words):
                         dict_key = f"[{xcode_num.zfill(3)}] {clean_name}"
                         if dict_key not in categories:
                             categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
@@ -311,13 +320,13 @@ def get_zavanas_categories():
             pass
 
     if categories:
-        # 번호순으로 차례대로 정렬
         sorted_cats = dict(sorted(categories.items(), key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 999))
         return sorted_cats
 
     return {
-        "[001] 특가/원단 라인업": "https://zavanas.com/shop/shopbrand.html?xcode=001",
-        "[002] 티셔츠": "https://zavanas.com/shop/shopbrand.html?xcode=002"
+        "[001] A헤비코튼/자켓/특가": "https://zavanas.com/shop/shopbrand.html?xcode=001",
+        "[002] B에센셜피마스판": "https://zavanas.com/shop/shopbrand.html?xcode=002",
+        "[003] C밸런스드수피마": "https://zavanas.com/shop/shopbrand.html?xcode=003"
     }
 
 @st.cache_data(ttl=1800)
@@ -350,22 +359,55 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 detail_res.encoding = 'euc-kr'
                 detail_soup = BeautifulSoup(detail_res.text, "html.parser")
                 
-                name_tag = detail_soup.select_one('meta[property="og:title"], h2, .prd-name, .title')
-                prod_name = name_tag.get("content", "").strip() if name_tag and name_tag.get("content") else (name_tag.text.strip() if name_tag else "자바나스 상품")
-                
+                # --- 1. 상품명 정밀 파싱 ---
+                prod_name = ""
+                title_tag = detail_soup.select_one('title')
+                if title_tag and title_tag.text:
+                    raw_title = title_tag.text.strip()
+                    clean_title = re.sub(r'[\-\|\:]\s*자바나스.*$', '', raw_title, flags=re.IGNORECASE).strip()
+                    clean_title = re.sub(r'^자바나스\(zavanas\).*?-\s*', '', clean_title, flags=re.IGNORECASE).strip()
+                    if clean_title and "공식 온라인 스토어" not in clean_title and "since 2009" not in clean_title:
+                        prod_name = clean_title
+
+                if not prod_name:
+                    name_selectors = ['.prd-name', '.detail_title', '.item_title', '.goods_name', 'h2', 'h3', '.prd_name', '#detail_info_title']
+                    for sel in name_selectors:
+                        tag = detail_soup.select_one(sel)
+                        if tag and tag.text.strip():
+                            t = tag.text.strip()
+                            if "공식 온라인 스토어" not in t and "since 2009" not in t:
+                                prod_name = t
+                                break
+
+                if not prod_name:
+                    prod_name = "자바나스 상품"
+
+                # --- 2. 이미지 추출 ---
                 img_tag = detail_soup.select_one('meta[property="og:image"]')
                 img_url = img_tag.get("content", "") if img_tag else ""
                 
+                # --- 3. 가격 정밀 파싱 ---
+                price = ""
                 price_meta = detail_soup.select_one('meta[property="product:price:amount"]')
                 if price_meta and price_meta.get("content"):
                     try:
                         price = f"{int(price_meta['content']):,}원"
                     except:
                         price = price_meta.get("content")
-                else:
-                    price_tag = detail_soup.select_one('.price, .mk_price, #price, .price_val')
-                    price = price_tag.text.strip() if price_tag else "가격 확인"
 
+                if not price or price == "0원":
+                    price_tags = detail_soup.select('.price, .mk_price, #price, .price_val, .sale_price, td')
+                    for pt in price_tags:
+                        pt_text = pt.text.strip()
+                        m = re.search(r'([\d,]+)\s*원', pt_text)
+                        if m and m.group(1) != "0":
+                            price = f"{m.group(1)}원"
+                            break
+
+                if not price:
+                    price = "가격 확인"
+
+                # --- 4. 옵션(L사이즈) 확인 ---
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
