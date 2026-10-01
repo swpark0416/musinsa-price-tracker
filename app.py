@@ -138,11 +138,6 @@ def get_musinsa_goods_info(goods_id):
                         price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
                         normal_price = data.get("normalPrice") or data.get("originalPrice") or price
                         image_url = data.get("thumbnailImageUrl") or data.get("imageUrl") or data.get("image") or ""
-                        
-                        category = "기타"
-                        cat_info = data.get("category")
-                        if isinstance(cat_info, dict):
-                            category = cat_info.get("categoryDepth2Name") or cat_info.get("categoryDepth1Name", "기타")
 
                         if goods_name and price:
                             if image_url and not image_url.startswith("http"):
@@ -156,7 +151,7 @@ def get_musinsa_goods_info(goods_id):
                                 "goods_name": goods_name,
                                 "brand_name": brand_name,
                                 "image_url": image_url,
-                                "category": category,
+                                "category": "의류",
                                 "normal_price": normal_price,
                                 "price": price,
                                 "discount_rate": discount_rate,
@@ -214,7 +209,7 @@ def get_musinsa_goods_info(goods_id):
 
     return None
 
-# DB 데이터 렌더링 헬퍼
+# DB 데이터 렌더링 헬퍼 (시간 정보 정제 포함)
 def load_tracked_products():
     res = supabase.table("tracked_products").select("*").order("created_at", desc=True).execute()
     return pd.DataFrame(res.data)
@@ -225,6 +220,10 @@ def load_price_logs():
     if not df.empty:
         df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
         df = df.dropna(subset=["created_at"])
+        
+        # KST 시간 변환 후 YYYY-MM-DD 날짜 전용 문자열 생성 (시간 제거)
+        df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
+        df["date_str"] = df["created_at_kst"].dt.strftime("%Y-%m-%d")
         
         df["discount_rate"] = df.apply(
             lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
@@ -273,7 +272,7 @@ def sync_today_prices_if_needed(products_df):
 # 최상위 2개 메인 탭 구성
 # =========================================================
 main_tab1, main_tab2 = st.tabs([
-    "🛍️️ 무신사 스마트 트래커", 
+    "🛍 무신사 스마트 트래커", 
     "🏷️ 태그별 가격 비교"
 ])
 
@@ -288,7 +287,7 @@ with main_tab1:
     ])
 
     # -----------------------------------------------------
-    # SUB TAB 1: 개별 상품 가격 추이 대시보드 (원래 스타일 복원)
+    # SUB TAB 1: 개별 상품 가격 추이 대시보드 (태그 기반 구분)
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
@@ -303,15 +302,31 @@ with main_tab1:
         if products_df.empty:
             st.info("아직 추적 중인 상품이 없습니다. '➕ 추적 상품 관리' 탭에서 상품을 추가해 보세요!")
         else:
+            # 태그 목록 동적 추출
+            tag_options = ["전체"]
+            if "tags" in products_df.columns:
+                extracted_tags = set()
+                for t_str in products_df["tags"].dropna():
+                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
+                    for p in parts:
+                        tag_name = p if p.startswith('#') else f"#{p}"
+                        extracted_tags.add(tag_name)
+                tag_options += sorted(list(extracted_tags))
+
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                categories = ["전체"] + sorted(list(products_df["category"].dropna().unique()))
-                selected_cat = st.selectbox("📂 카테고리 필터", categories)
-            
-            filtered_products = products_df if selected_cat == "전체" else products_df[products_df["category"] == selected_cat]
+                selected_tag = st.selectbox("🏷️ 태그 필터", tag_options)
+
+            # 태그 1차 필터링
+            filtered_products = products_df.copy()
+            if selected_tag != "전체":
+                clean_tag = selected_tag.lstrip('#')
+                filtered_products = filtered_products[
+                    filtered_products["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
+                ]
 
             if filtered_products.empty:
-                st.warning("해당 카테고리에 등록된 상품이 없습니다.")
+                st.warning("선택한 태그에 지정된 상품이 없습니다.")
             else:
                 with col_f2:
                     selected_goods_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["goods_name"].unique())
@@ -327,7 +342,7 @@ with main_tab1:
                     if brand:
                         st.caption(f"🏷 **{brand}**")
                     st.subheader(product_info["goods_name"])
-                    st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
+                    st.caption(f"태그: {product_info.get('tags', '-')}")
                     
                     product_logs = logs_df[logs_df["goods_id"] == g_id] if not logs_df.empty else pd.DataFrame()
                     
@@ -356,32 +371,29 @@ with main_tab1:
                 if not product_logs.empty:
                     st.markdown("### 📈 가격 및 할인율 변동 추이")
                     
-                    min_p = int(product_logs["price"].min())
-                    max_p = int(product_logs["price"].max())
-
-                    y_min = max(0, (min_p // 10000) * 10000 - 10000)
-                    y_max = ((max_p // 10000) + 1) * 10000 + 10000
-
-                    if y_min >= y_max:
-                        y_min = max(0, (min_p // 10000) * 10000)
-                        y_max = y_min + 20000
-
-                    tick_vals = list(range(y_min, y_max + 1, 10000))
-                    tick_texts = [f"{v // 10000}만원" if v > 0 else "0원" for v in tick_vals]
+                    # Y축 여백 자동 정밀 세팅
+                    p_min = int(product_logs["price"].min())
+                    p_max = int(product_logs["price"].max())
+                    p_pad = max(5000, int((p_max - p_min) * 0.2)) if p_max != p_min else 10000
 
                     fig_price = px.line(
                         product_logs, 
-                        x="created_at", 
+                        x="date_str", 
                         y="price", 
                         title="판매가 변동 추이", 
                         markers=True,
-                        labels={"created_at": "날짜", "price": "판매가"}
+                        labels={"date_str": "날짜", "price": "판매가(원)"}
                     )
                     fig_price.update_traces(
-                        hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>판매가:</b> %{y:,}원<extra></extra>"
+                        marker=dict(size=10),
+                        hovertemplate="<b>날짜:</b> %{x}<br><b>판매가:</b> %{y:,}원<extra></extra>"
                     )
-                    fig_price.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
-                    fig_price.update_yaxes(tickmode="array", tickvals=tick_vals, ticktext=tick_texts, range=[y_min, y_max])
+                    fig_price.update_xaxes(type='category')
+                    fig_price.update_yaxes(
+                        range=[max(0, p_min - p_pad), p_max + p_pad], 
+                        tickformat=",d", 
+                        ticksuffix="원"
+                    )
                     st.plotly_chart(fig_price, use_container_width=True)
 
                     min_d = product_logs["discount_rate"].min()
@@ -394,23 +406,24 @@ with main_tab1:
 
                     fig_discount = px.line(
                         product_logs, 
-                        x="created_at", 
+                        x="date_str", 
                         y="discount_rate", 
                         title="할인율 변동 추이 (%)", 
                         markers=True,
-                        labels={"created_at": "날짜", "discount_rate": "할인율 (%)"}
+                        labels={"date_str": "날짜", "discount_rate": "할인율 (%)"}
                     )
                     fig_discount.update_traces(
-                        hovertemplate="<b>날짜:</b> %{x|%Y-%m-%d}<br><b>할인율:</b> %{y}%<extra></extra>"
+                        marker=dict(size=10),
+                        hovertemplate="<b>날짜:</b> %{x}<br><b>할인율:</b> %{y}%<extra></extra>"
                     )
-                    fig_discount.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
+                    fig_discount.update_xaxes(type='category')
                     fig_discount.update_yaxes(dtick=5, range=[d_min, d_max], ticksuffix="%")
                     st.plotly_chart(fig_discount, use_container_width=True)
                 else:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (입력창 자동비우기 적용)
+    # SUB TAB 2: 무신사 추적 상품 관리 (태그 수정 기능 추가)
     # -----------------------------------------------------
     with musinsa_tab2:
         st.subheader("➕ 새로운 추적 상품 추가")
@@ -437,7 +450,7 @@ with main_tab1:
                                 "goods_name": info["goods_name"],
                                 "brand_name": info["brand_name"],
                                 "image_url": info["image_url"],
-                                "category": info["category"],
+                                "category": "의류",
                                 "tags": input_tags,
                                 "url": info["url"]
                             }
@@ -476,7 +489,24 @@ with main_tab1:
                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else ""
                     title_str = f"**[{brand}] {row['goods_name']}**" if brand else f"**{row['goods_name']}**"
                     st.markdown(f"{title_str} (ID: `{row['goods_id']}`)")
-                    st.caption(f"카테고리: {row['category']} | 태그: {row.get('tags', '-')}")
+                    
+                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "없음"
+                    st.caption(f"🏷️ 현재 태그: `{curr_tag}`")
+
+                    # 태그 수정 팝오버 폼
+                    with st.popover("✏️ 태그 수정"):
+                        with st.form(key=f"edit_tag_form_{row['goods_id']}"):
+                            edit_tag_val = st.text_input(
+                                "새 태그 입력", 
+                                value=row.get("tags") if pd.notna(row.get("tags")) else "", 
+                                placeholder="예: #상의, #위시리스트"
+                            )
+                            if st.form_submit_button("저장"):
+                                supabase.table("tracked_products").update({"tags": edit_tag_val}).eq("goods_id", row["goods_id"]).execute()
+                                st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
+                                time.sleep(0.3)
+                                st.rerun()
+
                 with col_del:
                     if st.button("🗑 삭제", key=f"del_{row['goods_id']}"):
                         supabase.table("tracked_products").delete().eq("goods_id", row["goods_id"]).execute()
@@ -510,7 +540,6 @@ with main_tab1:
                             with tc2:
                                 st.write(f"**브랜드:** {live['brand_name']}")
                                 st.write(f"**상품명:** {live['goods_name']}")
-                                st.write(f"**카테고리:** {live['category']}")
                                 st.markdown(f"**정가:** ~~{live['normal_price']:,} 원~~")
                                 st.markdown(f"**판매가:** {live['price']:,} 원")
                                 st.markdown(f"**할인율:** {live['discount_rate']}% 🔥")
@@ -519,7 +548,7 @@ with main_tab1:
                             st.error("🚨 실시간 가격 조회에 실패했습니다.")
 
 # =========================================================
-# MAIN TAB 2: 무신사 태그별 가격 비교 대시보드 (신규 배치)
+# MAIN TAB 2: 무신사 태그별 가격 비교 대시보드
 # =========================================================
 with main_tab2:
     st.subheader("🏷️ 태그별 상품 가격 비교 대시보드")
@@ -543,7 +572,7 @@ with main_tab2:
             tag_options = sorted(list(extracted_tags))
 
         if not tag_options:
-            st.warning("등록된 태그가 없습니다. '➕ 추적 상품 관리' 탭에서 상품 추가 시 #태그를 입력해 보세요!")
+            st.warning("등록된 태그가 없습니다. '➕ 추적 상품 관리' 탭에서 상품 추가/수정 시 #태그를 입력해 보세요!")
         else:
             selected_tag = st.selectbox("🏷️ 비교할 태그 선택", tag_options)
             clean_tag = selected_tag.lstrip('#')
@@ -568,19 +597,33 @@ with main_tab2:
                             axis=1
                         )
 
+                        # Y축 여백 자동 정밀 세팅
+                        t_min = int(tag_logs["price"].min())
+                        t_max = int(tag_logs["price"].max())
+                        t_pad = max(5000, int((t_max - t_min) * 0.2)) if t_max != t_min else 10000
+
                         fig_tag = px.line(
                             tag_logs,
-                            x="created_at",
+                            x="date_str",
                             y="price",
                             color="display_name",
                             markers=True,
                             title=f"📈 {selected_tag} 태그 상품 가격 비교 추이",
-                            labels={"created_at": "날짜", "price": "판매가(원)", "display_name": "상품명"}
+                            labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
                         )
                         fig_tag.update_traces(
-                            hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x|%Y-%m-%d}<br>판매가: %{y:,}원<extra></extra>"
+                            marker=dict(size=10),
+                            hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
                         )
-                        fig_tag.update_xaxes(dtick="D1", tickformat="%Y-%m-%d")
+                        fig_tag.update_xaxes(type='category')
+                        fig_tag.update_yaxes(
+                            range=[max(0, t_min - t_pad), t_max + t_pad], 
+                            tickformat=",d", 
+                            ticksuffix="원"
+                        )
+                        fig_tag.update_layout(
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+                        )
                         st.plotly_chart(fig_tag, use_container_width=True)
 
                 st.divider()
@@ -593,5 +636,5 @@ with main_tab2:
                     with c2:
                         b_str = f"[{p_row['brand_name']}] " if pd.notna(p_row.get('brand_name')) and p_row.get('brand_name') else ""
                         st.markdown(f"**{b_str}{p_row['goods_name']}**")
-                        st.caption(f"카테고리: {p_row['category']} | 태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
+                        st.caption(f"태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
                     st.divider()
