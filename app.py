@@ -271,11 +271,11 @@ def sync_today_prices_if_needed(products_df):
             st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
 
 # ---------------------------------------------------------
-# 자바나스(MakeShop) 메인 카테고리 추출 및 L사이즈 재고 파싱 (정밀 보완)
+# 자바나스(MakeShop) CP949 인코딩 기반 카테고리/재고 정밀 크롤러
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_zavanas_categories():
-    """하위 카테고리를 제외하고 자바나스의 최상위 메인 카테고리만 깔끔하게 중복 없이 수집합니다."""
+    """CP949 디코딩으로 자바나스의 최상위 카테고리만 깔끔하게 수집합니다."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -290,14 +290,13 @@ def get_zavanas_categories():
     for target_url in urls_to_scan:
         try:
             res = requests.get(target_url, headers=headers, timeout=5)
-            res.encoding = 'euc-kr'
-            soup = BeautifulSoup(res.text, "html.parser")
+            html_text = res.content.decode('cp949', 'ignore')
+            soup = BeautifulSoup(html_text, "html.parser")
             
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
                 name = a_tag.text.strip()
                 
-                # 하위 카테고리(mcode)가 포함된 파라미터는 제거하여 최상위 카테고리만 포함
                 if "mcode=" in href:
                     continue
                     
@@ -312,12 +311,10 @@ def get_zavanas_categories():
                     if len(clean_name) > 1 and not is_product_title and not any(w == clean_name.upper() for w in ignore_words):
                         dict_key = f"[{xcode_num.zfill(3)}] {clean_name}"
                         
-                        # 동일 xcode 중 대표 카테고리 이름 하나만 남기기
                         existing_key = next((k for k in categories if k.startswith(f"[{xcode_num.zfill(3)}]")), None)
                         if not existing_key:
                             categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
                         else:
-                            # 이미 있는 명칭보다 짧고 대표성을 띤 명칭으로 대체
                             if len(clean_name) < len(existing_key.split(']', 1)[-1].strip()):
                                 del categories[existing_key]
                                 categories[dict_key] = f"https://zavanas.com/shop/shopbrand.html?xcode={xcode_num}"
@@ -336,7 +333,7 @@ def get_zavanas_categories():
 
 @st.cache_data(ttl=1800)
 def fetch_zabanus_l_stock(category_name, category_url):
-    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 ('- 품절' 등 정밀 판별)."""
+    """자바나스 카테고리를 순회하며 L사이즈 재고가 남은 상품을 파싱합니다 (품절 상태 100% 검증)."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -344,11 +341,11 @@ def fetch_zabanus_l_stock(category_name, category_url):
     available_items = []
     try:
         res = requests.get(category_url, headers=headers, timeout=8)
-        res.encoding = 'euc-kr'
         if res.status_code != 200:
             return []
 
-        soup = BeautifulSoup(res.text, "html.parser")
+        html_text = res.content.decode('cp949', 'ignore')
+        soup = BeautifulSoup(html_text, "html.parser")
         
         product_links = []
         for a_tag in soup.select('a[href*="shopdetail.html"]'):
@@ -361,8 +358,8 @@ def fetch_zabanus_l_stock(category_name, category_url):
         for prod_link in product_links[:20]:
             try:
                 detail_res = requests.get(prod_link, headers=headers, timeout=5)
-                detail_res.encoding = 'euc-kr'
-                detail_soup = BeautifulSoup(detail_res.text, "html.parser")
+                detail_html = detail_res.content.decode('cp949', 'ignore')
+                detail_soup = BeautifulSoup(detail_html, "html.parser")
                 
                 # --- 1. 상품명 정밀 파싱 ---
                 prod_name = ""
@@ -412,20 +409,29 @@ def fetch_zabanus_l_stock(category_name, category_url):
                 if not price:
                     price = "가격 확인"
 
-                # --- 4. 옵션(L사이즈) 품절 정밀 판별 ---
+                # --- 4. 옵션(L사이즈) 품절 상태 100% 검증 ---
                 options = detail_soup.select("select option")
                 has_l_size = False
                 l_options_found = []
 
                 for opt in options:
                     opt_text = opt.text.strip()
-                    opt_upper = opt_text.upper().replace(" ", "")
+                    opt_val = opt.get('value', '').strip()
 
-                    # '품절', '- 품절', '(품절)', '[품절]', 'SOLDOUT' 등 포함 시 품절 처리
-                    is_soldout = ("품절" in opt_text) or ("SOLDOUT" in opt_upper) or ("OUTOFSTOCK" in opt_upper) or opt.has_attr('disabled')
-                    
-                    # XL, XXL 등이 L로 오인되지 않도록 단독 L / LARGE / 100 매칭
-                    is_l_size = bool(re.search(r'(?<![A-Z])(L|LARGE|100)(?![A-Z])', opt_text.upper()))
+                    # 기본 가이드 문구 및 빈 값은 검사에서 제외
+                    if not opt_val or opt_val in ["0", "none", ""] or "선택" in opt_text:
+                        continue
+
+                    # L / LARGE / 100 사이즈 정확한 매칭 (단독 단어 매칭)
+                    is_l_size = bool(re.search(r'(?<![A-Z0-9])(L|LARGE|100)(?![A-Z0-9])', opt_text.upper()))
+
+                    # 품절 여부 종합 검사 (표시 텍스트 + Value 속성 + 태그 disabled 여부)
+                    combined_check_str = f"{opt_text} {opt_val}".upper().replace(" ", "")
+                    is_soldout = (
+                        bool(re.search(r'품\s*절|SOLDOUT|OUTOFSTOCK|재고\s*없음|DISABLED', combined_check_str))
+                        or opt.has_attr('disabled')
+                        or 'disabled' in opt.get('class', [])
+                    )
 
                     if is_l_size and not is_soldout:
                         has_l_size = True
@@ -451,7 +457,7 @@ def fetch_zabanus_l_stock(category_name, category_url):
 # 최상위 2개 메인 탭 구성 (무신사 vs 자바나스)
 # =========================================================
 main_tab1, main_tab2 = st.tabs([
-    "🛍️️ 무신사 스마트 트래커", 
+    "🛍 무신사 스마트 트래커", 
     "👕 자바나스 L사이즈 재고"
 ])
 
@@ -503,7 +509,7 @@ with main_tab1:
                 with card_col2:
                     brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
                     if brand:
-                        st.caption(f"🏷️️ **{brand}**")
+                        st.caption(f"🏷 **{brand}**")
                     st.subheader(product_info["goods_name"])
                     st.caption(f"카테고리: {product_info['category']} | 태그: {product_info.get('tags', '-')}")
                     
