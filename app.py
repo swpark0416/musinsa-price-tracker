@@ -269,14 +269,15 @@ main_tab1, main_tab2 = st.tabs([
 # MAIN TAB 1: 무신사 개별 상품 트래커
 # =========================================================
 with main_tab1:
+    # 요청에 따라 '➕ 추적 상품 관리'를 가장 왼쪽(첫 번째)으로 배치
     musinsa_tab1, musinsa_tab2, musinsa_tab3 = st.tabs([
-        "📊 개별 상품 가격 추이", 
         "➕ 추적 상품 관리", 
+        "📊 개별 상품 가격 추이", 
         "⚡ 실시간 조회 (테스트)"
     ])
 
     # -----------------------------------------------------
-    # SUB TAB 1: 개별 상품 가격 추이 대시보드
+    # SUB TAB 1: 무신사 추적 상품 관리 (첫 화면 자동 표시)
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
@@ -286,6 +287,189 @@ with main_tab1:
                 sync_today_prices_if_needed(products_df)
             st.session_state["today_synced"] = True
 
+        logs_df = load_price_logs()
+
+        st.subheader("➕ 새로운 추적 상품 추가")
+
+        with st.form("add_product_form", clear_on_submit=True):
+            input_url = st.text_input("무신사 상품 URL 또는 ID", placeholder="예: https://www.musinsa.com/app/goods/2081557 또는 2081557")
+            input_tags = st.text_input("커스텀 태그 (선택)", placeholder="예: #상의, #위시리스트")
+            submit_button = st.form_submit_button("추적 등록하기")
+
+        if submit_button:
+            if not input_url.strip():
+                st.warning("⚠️ 상품 URL 또는 ID를 입력해 주세요.")
+            else:
+                goods_id = parse_goods_id(input_url)
+                if not goods_id:
+                    st.error("❌ 입력된 내용에서 올바른 무신사 상품 ID(숫자)를 찾을 수 없습니다.")
+                else:
+                    with st.spinner(f"상품 ID({goods_id}) 정보를 수집하고 DB에 등록하는 중..."):
+                        info = get_musinsa_goods_info(goods_id)
+                        if info:
+                            prod_data = {
+                                "goods_id": info["goods_id"],
+                                "goods_name": info["goods_name"],
+                                "brand_name": info["brand_name"],
+                                "category": "의류",
+                                "tags": input_tags,
+                                "url": info["url"]
+                            }
+                            
+                            try:
+                                supabase.table("tracked_products").upsert(prod_data).execute()
+                            except Exception:
+                                prod_data.pop("brand_name", None)
+                                if info["brand_name"] and info["brand_name"] != "MUSINSA":
+                                    prod_data["goods_name"] = f"[{info['brand_name']}] {info['goods_name']}"
+                                supabase.table("tracked_products").upsert(prod_data).execute()
+
+                            log_data = {
+                                "goods_id": info["goods_id"],
+                                "normal_price": info["normal_price"],
+                                "price": info["price"]
+                            }
+                            supabase.table("price_logs").insert(log_data).execute()
+
+                            st.success(f"✅ **[{info['brand_name']}] {info['goods_name']}** 상품이 등록되었습니다!")
+                            st.rerun()
+                        else:
+                            st.error("🚨 상품 정보 수집에 실패하여 DB에 등록하지 못했습니다.")
+
+        st.divider()
+
+        st.subheader("📋 현재 추적 중인 상품 목록")
+
+        if tracked_df.empty:
+            st.info("등록된 추적 상품이 없습니다.")
+        else:
+            manage_tag_options = ["전체"]
+            if "tags" in tracked_df.columns:
+                extracted_tags = set()
+                for t_str in tracked_df["tags"].dropna():
+                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
+                    for p in parts:
+                        tag_name = p if p.startswith('#') else f"#{p}"
+                        extracted_tags.add(tag_name)
+                manage_tag_options += sorted(list(extracted_tags))
+
+            selected_manage_tag = st.selectbox("🏷️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
+
+            filtered_tracked = tracked_df.copy()
+            if selected_manage_tag != "전체":
+                clean_tag = selected_manage_tag.lstrip('#')
+                filtered_tracked = filtered_tracked[
+                    filtered_tracked["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
+                ]
+
+            if filtered_tracked.empty:
+                st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
+            else:
+                # -------------------------------------------------
+                # 전날 대비 가격 변동 감지 및 카라풀 카드 렌더링
+                # -------------------------------------------------
+                cards_html_list = []
+
+                for _, row in filtered_tracked.iterrows():
+                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
+                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
+
+                    p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
+                    
+                    price_html_str = "수집중"
+                    bg_color = "#ffffff"       # 기본 배경색: 흰색
+                    border_color = "#e9ecef"   # 기본 테두리: 연회색
+
+                    if not p_logs.empty:
+                        # 일자별 가격 로그 중 중복을 제거한 최근 기록 비교
+                        p_logs_daily = p_logs.drop_duplicates(subset=["date_str"], keep="last")
+                        
+                        latest_p = p_logs_daily.iloc[-1]
+                        c_price = int(latest_p['price'])
+                        n_price = int(latest_p['normal_price'])
+                        disc = latest_p.get('discount_rate', 0)
+
+                        # 전날(이전) 가격과 비교하여 배경색 결정
+                        if len(p_logs_daily) >= 2:
+                            prev_price = int(p_logs_daily.iloc[-2]['price'])
+                            if c_price < prev_price:
+                                # 가격 하락 -> 파란색 계열 💙
+                                bg_color = "#e7f5ff"
+                                border_color = "#74c0fc"
+                            elif c_price > prev_price:
+                                # 가격 상승 -> 빨간색 계열 ❤️
+                                bg_color = "#fff5f5"
+                                border_color = "#ffc9c9"
+
+                        if n_price > c_price and disc > 0:
+                            price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
+                        else:
+                            price_html_str = f"{c_price:,}원"
+
+                    single_card = (
+                        f'<div style="background:{bg_color}; border:1px solid {border_color}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;">'
+                        f'<div>'
+                        f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
+                        f'<div style="font-size:10px; font-weight:bold; color:#212529; line-height:1.25; height:25px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin:2px 0 4px 0;">{row["goods_name"]}</div>'
+                        f'</div>'
+                        f'<div>'
+                        f'<div style="font-size:10px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:3px;">{price_html_str}</div>'
+                        f'<div style="font-size:9px; color:#2b8a3e; background:#e6fcf5; display:inline-block; padding:1px 4px; border-radius:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">🏷️ {curr_tag}</div>'
+                        f'</div>'
+                        f'</div>'
+                    )
+                    cards_html_list.append(single_card)
+
+                full_grid_html = (
+                    f'<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; width:100%; box-sizing:border-box; margin-bottom:15px;">'
+                    f'{"".join(cards_html_list)}'
+                    f'</div>'
+                )
+
+                st.markdown(full_grid_html, unsafe_allow_html=True)
+
+                # -------------------------------------------------
+                # 하단 전용 상품 관리 패널 (태그 수정 및 삭제)
+                # -------------------------------------------------
+                st.markdown("#### ⚙️ 상품 관리 (태그 수정 / 삭제)")
+                
+                manage_options = {
+                    f"[{r.get('brand_name', '무신사')}] {r['goods_name']}": r
+                    for _, r in filtered_tracked.iterrows()
+                }
+
+                selected_label = st.selectbox("관리할 상품 선택", list(manage_options.keys()), key="manage_prod_select")
+                selected_prod = manage_options[selected_label]
+
+                col_m1, col_m2 = st.columns([2, 1])
+
+                with col_m1:
+                    with st.form(key=f"manage_tag_form_{selected_prod['goods_id']}"):
+                        new_tag_val = st.text_input(
+                            "태그 수정", 
+                            value=selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else "", 
+                            placeholder="예: #상의, #봄아우터"
+                        )
+                        if st.form_submit_button("🏷️ 태그 저장", use_container_width=True):
+                            supabase.table("tracked_products").update({"tags": new_tag_val}).eq("goods_id", selected_prod["goods_id"]).execute()
+                            st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
+                            time.sleep(0.3)
+                            st.rerun()
+
+                with col_m2:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑️ 추적 삭제", key=f"manage_del_btn_{selected_prod['goods_id']}", use_container_width=True):
+                        supabase.table("tracked_products").delete().eq("goods_id", selected_prod["goods_id"]).execute()
+                        st.success("삭제되었습니다.")
+                        time.sleep(0.3)
+                        st.rerun()
+
+    # -----------------------------------------------------
+    # SUB TAB 2: 개별 상품 가격 추이 대시보드
+    # -----------------------------------------------------
+    with musinsa_tab2:
+        products_df = load_tracked_products()
         logs_df = load_price_logs()
 
         if products_df.empty:
@@ -303,7 +487,7 @@ with main_tab1:
 
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                selected_tag = st.selectbox("🏷️️ 태그 필터", tag_options)
+                selected_tag = st.selectbox("🏷 태그 필터", tag_options)
 
             filtered_products = products_df.copy()
             if selected_tag != "전체":
@@ -396,170 +580,6 @@ with main_tab1:
                     st.info("아직 누적된 가격 로그 데이터가 없습니다.")
 
     # -----------------------------------------------------
-    # SUB TAB 2: 무신사 추적 상품 관리 (코드 블록 방지 퍼펙트 3열 그리드)
-    # -----------------------------------------------------
-    with musinsa_tab2:
-        st.subheader("➕ 새로운 추적 상품 추가")
-
-        with st.form("add_product_form", clear_on_submit=True):
-            input_url = st.text_input("무신사 상품 URL 또는 ID", placeholder="예: https://www.musinsa.com/app/goods/2081557 또는 2081557")
-            input_tags = st.text_input("커스텀 태그 (선택)", placeholder="예: #상의, #위시리스트")
-            submit_button = st.form_submit_button("추적 등록하기")
-
-        if submit_button:
-            if not input_url.strip():
-                st.warning("⚠️ 상품 URL 또는 ID를 입력해 주세요.")
-            else:
-                goods_id = parse_goods_id(input_url)
-                if not goods_id:
-                    st.error("❌ 입력된 내용에서 올바른 무신사 상품 ID(숫자)를 찾을 수 없습니다.")
-                else:
-                    with st.spinner(f"상품 ID({goods_id}) 정보를 수집하고 DB에 등록하는 중..."):
-                        info = get_musinsa_goods_info(goods_id)
-                        if info:
-                            prod_data = {
-                                "goods_id": info["goods_id"],
-                                "goods_name": info["goods_name"],
-                                "brand_name": info["brand_name"],
-                                "category": "의류",
-                                "tags": input_tags,
-                                "url": info["url"]
-                            }
-                            
-                            try:
-                                supabase.table("tracked_products").upsert(prod_data).execute()
-                            except Exception:
-                                prod_data.pop("brand_name", None)
-                                if info["brand_name"] and info["brand_name"] != "MUSINSA":
-                                    prod_data["goods_name"] = f"[{info['brand_name']}] {info['goods_name']}"
-                                supabase.table("tracked_products").upsert(prod_data).execute()
-
-                            log_data = {
-                                "goods_id": info["goods_id"],
-                                "normal_price": info["normal_price"],
-                                "price": info["price"]
-                            }
-                            supabase.table("price_logs").insert(log_data).execute()
-
-                            st.success(f"✅ **[{info['brand_name']}] {info['goods_name']}** 상품이 등록되었습니다!")
-                            st.rerun()
-                        else:
-                            st.error("🚨 상품 정보 수집에 실패하여 DB에 등록하지 못했습니다.")
-
-        st.divider()
-
-        st.subheader("📋 현재 추적 중인 상품 목록")
-        tracked_df = load_tracked_products()
-        logs_df = load_price_logs()
-
-        if tracked_df.empty:
-            st.info("등록된 추적 상품이 없습니다.")
-        else:
-            manage_tag_options = ["전체"]
-            if "tags" in tracked_df.columns:
-                extracted_tags = set()
-                for t_str in tracked_df["tags"].dropna():
-                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
-                    for p in parts:
-                        tag_name = p if p.startswith('#') else f"#{p}"
-                        extracted_tags.add(tag_name)
-                manage_tag_options += sorted(list(extracted_tags))
-
-            selected_manage_tag = st.selectbox("🏷️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
-
-            filtered_tracked = tracked_df.copy()
-            if selected_manage_tag != "전체":
-                clean_tag = selected_manage_tag.lstrip('#')
-                filtered_tracked = filtered_tracked[
-                    filtered_tracked["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
-                ]
-
-            if filtered_tracked.empty:
-                st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
-            else:
-                # -------------------------------------------------
-                # 마크다운 코드 블록 파싱 원천 차단 (한 줄 연결 HTML)
-                # -------------------------------------------------
-                cards_html_list = []
-
-                for _, row in filtered_tracked.iterrows():
-                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
-                    curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
-
-                    p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
-                    
-                    price_html_str = "수집중"
-                    if not p_logs.empty:
-                        latest_p = p_logs.iloc[-1]
-                        c_price = int(latest_p['price'])
-                        n_price = int(latest_p['normal_price'])
-                        disc = latest_p.get('discount_rate', 0)
-
-                        if n_price > c_price and disc > 0:
-                            price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
-                        else:
-                            price_html_str = f"{c_price:,}원"
-
-                    single_card = (
-                        f'<div style="background:#ffffff; border:1px solid #e9ecef; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;">'
-                        f'<div>'
-                        f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
-                        f'<div style="font-size:10px; font-weight:bold; color:#212529; line-height:1.25; height:25px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin:2px 0 4px 0;">{row["goods_name"]}</div>'
-                        f'</div>'
-                        f'<div>'
-                        f'<div style="font-size:10px; font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:3px;">{price_html_str}</div>'
-                        f'<div style="font-size:9px; color:#2b8a3e; background:#e6fcf5; display:inline-block; padding:1px 4px; border-radius:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">🏷️ {curr_tag}</div>'
-                        f'</div>'
-                        f'</div>'
-                    )
-                    cards_html_list.append(single_card)
-
-                full_grid_html = (
-                    f'<div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; width:100%; box-sizing:border-box; margin-bottom:15px;">'
-                    f'{"".join(cards_html_list)}'
-                    f'</div>'
-                )
-
-                st.markdown(full_grid_html, unsafe_allow_html=True)
-
-                # -------------------------------------------------
-                # 하단 전용 상품 관리 패널 (태그 수정 및 삭제)
-                # -------------------------------------------------
-                st.markdown("#### ⚙️ 상품 관리 (태그 수정 / 삭제)")
-                
-                manage_options = {
-                    f"[{r.get('brand_name', '무신사')}] {r['goods_name']}": r
-                    for _, r in filtered_tracked.iterrows()
-                }
-
-                selected_label = st.selectbox("관리할 상품 선택", list(manage_options.keys()), key="manage_prod_select")
-                selected_prod = manage_options[selected_label]
-
-                col_m1, col_m2 = st.columns([2, 1])
-
-                with col_m1:
-                    with st.form(key=f"manage_tag_form_{selected_prod['goods_id']}"):
-                        new_tag_val = st.text_input(
-                            "태그 수정", 
-                            value=selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else "", 
-                            placeholder="예: #상의, #봄아우터"
-                        )
-                        if st.form_submit_button("🏷️ 태그 저장", use_container_width=True):
-                            supabase.table("tracked_products").update({"tags": new_tag_val}).eq("goods_id", selected_prod["goods_id"]).execute()
-                            st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
-                            time.sleep(0.3)
-                            st.rerun()
-
-                with col_m2:
-                    st.write("")
-                    st.write("")
-                    if st.button("🗑️ 추적 삭제", key=f"manage_del_btn_{selected_prod['goods_id']}", use_container_width=True):
-                        supabase.table("tracked_products").delete().eq("goods_id", selected_prod["goods_id"]).execute()
-                        st.success("삭제되었습니다.")
-                        time.sleep(0.3)
-                        st.rerun()
-
-    # -----------------------------------------------------
     # SUB TAB 3: 무신사 실시간 조회
     # -----------------------------------------------------
     with musinsa_tab3:
@@ -597,7 +617,8 @@ with main_tab2:
     if products_df.empty:
         st.info("추적 중인 상품이 없습니다.")
     else:
-        tag_options = []
+        # 태그 목록 구성 ('전체' 옵션 추가)
+        tag_options = ["전체"]
         if "tags" in products_df.columns:
             extracted_tags = set()
             for t_str in products_df["tags"].dropna():
@@ -605,76 +626,76 @@ with main_tab2:
                 for p in parts:
                     tag_name = p if p.startswith('#') else f"#{p}"
                     extracted_tags.add(tag_name)
-            tag_options = sorted(list(extracted_tags))
+            tag_options += sorted(list(extracted_tags))
 
-        if not tag_options:
-            st.warning("등록된 태그가 없습니다.")
+        selected_tag = st.selectbox("🏷️ 비교할 태그 선택", tag_options)
+
+        if selected_tag == "전체":
+            tagged_products = products_df.copy()
+            st.success(f"**전체** 상품: 총 **{len(tagged_products)}개**")
         else:
-            selected_tag = st.selectbox("🏷️ 비교할 태그 선택", tag_options)
             clean_tag = selected_tag.lstrip('#')
-
             tagged_products = products_df[
                 products_df["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
             ]
+            st.success(f"**{selected_tag}** 태그 지정 상품: 총 **{len(tagged_products)}개**")
 
-            if tagged_products.empty:
-                st.info(f"현재 **{selected_tag}** 태그가 지정된 상품이 없습니다.")
-            else:
-                st.success(f"**{selected_tag}** 태그 지정 상품: 총 **{len(tagged_products)}개**")
+        if tagged_products.empty:
+            st.info(f"현재 선택한 조건에 해당하는 상품이 없습니다.")
+        else:
+            if not logs_df.empty:
+                tag_goods_ids = tagged_products["goods_id"].tolist()
+                tag_logs = logs_df[logs_df["goods_id"].isin(tag_goods_ids)].copy()
 
-                if not logs_df.empty:
-                    tag_goods_ids = tagged_products["goods_id"].tolist()
-                    tag_logs = logs_df[logs_df["goods_id"].isin(tag_goods_ids)].copy()
+                if not tag_logs.empty:
+                    tag_logs = tag_logs.merge(tagged_products[["goods_id", "goods_name", "brand_name"]], on="goods_id", how="left")
+                    tag_logs["display_name"] = tag_logs.apply(
+                        lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r['brand_name']) and r['brand_name'] else r['goods_name'],
+                        axis=1
+                    )
 
-                    if not tag_logs.empty:
-                        tag_logs = tag_logs.merge(tagged_products[["goods_id", "goods_name", "brand_name"]], on="goods_id", how="left")
-                        tag_logs["display_name"] = tag_logs.apply(
-                            lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r['brand_name']) and r['brand_name'] else r['goods_name'],
-                            axis=1
+                    t_min = int(tag_logs["price"].min())
+                    t_max = int(tag_logs["price"].max())
+                    t_pad = max(5000, int((t_max - t_min) * 0.2)) if t_max != t_min else 10000
+
+                    st.markdown(f"#### 📈 {'전체' if selected_tag == '전체' else selected_tag} 상품 가격 비교 추이")
+
+                    fig_tag = px.line(
+                        tag_logs,
+                        x="date_str",
+                        y="price",
+                        color="display_name",
+                        markers=True,
+                        labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
+                    )
+                    fig_tag.update_traces(
+                        marker=dict(size=8),
+                        hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
+                    )
+                    fig_tag.update_xaxes(type='category')
+                    fig_tag.update_yaxes(
+                        range=[max(0, t_min - t_pad), t_max + t_pad], 
+                        tickformat=",d", 
+                        ticksuffix="원"
+                    )
+                    fig_tag.update_layout(
+                        margin=dict(l=10, r=10, t=20, b=80),
+                        legend=dict(
+                            orientation="h",
+                            yanchor="top",
+                            y=-0.25,
+                            xanchor="left",
+                            x=0,
+                            font=dict(size=10)
                         )
+                    )
+                    st.plotly_chart(fig_tag, use_container_width=True)
 
-                        t_min = int(tag_logs["price"].min())
-                        t_max = int(tag_logs["price"].max())
-                        t_pad = max(5000, int((t_max - t_min) * 0.2)) if t_max != t_min else 10000
+            st.divider()
+            st.markdown(f"#### 📋 {'전체' if selected_tag == '전체' else selected_tag} 포함 상품 목록")
 
-                        st.markdown(f"#### 📈 {selected_tag} 태그 상품 가격 비교 추이")
-
-                        fig_tag = px.line(
-                            tag_logs,
-                            x="date_str",
-                            y="price",
-                            color="display_name",
-                            markers=True,
-                            labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
-                        )
-                        fig_tag.update_traces(
-                            marker=dict(size=8),
-                            hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
-                        )
-                        fig_tag.update_xaxes(type='category')
-                        fig_tag.update_yaxes(
-                            range=[max(0, t_min - t_pad), t_max + t_pad], 
-                            tickformat=",d", 
-                            ticksuffix="원"
-                        )
-                        fig_tag.update_layout(
-                            margin=dict(l=10, r=10, t=20, b=80),
-                            legend=dict(
-                                orientation="h",
-                                yanchor="top",
-                                y=-0.25,
-                                xanchor="left",
-                                x=0,
-                                font=dict(size=10)
-                            )
-                        )
-                        st.plotly_chart(fig_tag, use_container_width=True)
-
+            for _, p_row in tagged_products.iterrows():
+                b_str = f"[{p_row['brand_name']}] " if pd.notna(p_row.get('brand_name')) and p_row.get('brand_name') else ""
+                st.markdown(f"**{b_str}{p_row['goods_name']}**")
+                st.caption(f"태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
                 st.divider()
-                st.markdown(f"#### 📋 {selected_tag} 태그 포함 상품 목록")
-
-                for _, p_row in tagged_products.iterrows():
-                    b_str = f"[{p_row['brand_name']}] " if pd.notna(p_row.get('brand_name')) and p_row.get('brand_name') else ""
-                    st.markdown(f"**{b_str}{p_row['goods_name']}**")
-                    st.caption(f"태그: `{p_row.get('tags', '-')}` | [상품 이동]({p_row['url']})")
-                    st.divider()
