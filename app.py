@@ -269,7 +269,7 @@ main_tab1, main_tab2 = st.tabs([
 # MAIN TAB 1: 무신사 개별 상품 트래커
 # =========================================================
 with main_tab1:
-    # 요청에 따라 '➕ 추적 상품 관리'를 가장 왼쪽(첫 번째)으로 배치
+    # '➕ 추적 상품 관리'를 첫 화면으로 배치
     musinsa_tab1, musinsa_tab2, musinsa_tab3 = st.tabs([
         "➕ 추적 상품 관리", 
         "📊 개별 상품 가격 추이", 
@@ -281,6 +281,7 @@ with main_tab1:
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
+        tracked_df = products_df  # NameError 방지 변수 할당
 
         if "today_synced" not in st.session_state and not products_df.empty:
             with st.spinner("🔄 최신 가격 정보를 자동으로 확인하는 중..."):
@@ -353,7 +354,7 @@ with main_tab1:
                         extracted_tags.add(tag_name)
                 manage_tag_options += sorted(list(extracted_tags))
 
-            selected_manage_tag = st.selectbox("🏷️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
+            selected_manage_tag = st.selectbox("🏷️️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
 
             filtered_tracked = tracked_df.copy()
             if selected_manage_tag != "전체":
@@ -366,7 +367,7 @@ with main_tab1:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
                 # -------------------------------------------------
-                # 전날 대비 가격 변동 감지 및 카라풀 카드 렌더링
+                # 전날 대비 가격 변동 감지 및 컬러풀 3열 카드 렌더링
                 # -------------------------------------------------
                 cards_html_list = []
 
@@ -617,7 +618,7 @@ with main_tab2:
     if products_df.empty:
         st.info("추적 중인 상품이 없습니다.")
     else:
-        # 태그 목록 구성 ('전체' 옵션 추가)
+        # 태그 목록 구성 ('전체' 옵션 포함)
         tag_options = ["전체"]
         if "tags" in products_df.columns:
             extracted_tags = set()
