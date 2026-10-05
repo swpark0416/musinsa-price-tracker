@@ -11,7 +11,7 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 패딩 및 여백 최적화 CSS (라디오 버튼 탭 스타일 지정)
+# 모바일 패딩 및 여백 최적화 CSS
 # ---------------------------------------------------------
 st.markdown("""<style>
 .main .block-container {
@@ -323,7 +323,7 @@ with main_tab1:
     st.divider()
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 추적 상품 관리 (클릭 시 앱 내부 상세로 이동)
+    # SUB TAB 1: 무신사 추적 상품 관리 (스마트 태그 선택/생성)
     # -----------------------------------------------------
     if selected_sub_tab == "➕ 추적 상품 관리":
         products_df = load_tracked_products()
@@ -336,11 +336,28 @@ with main_tab1:
 
         logs_df = load_price_logs()
 
+        # DB에 등록된 기존 태그 추출
+        existing_tags = set()
+        if not products_df.empty and "tags" in products_df.columns:
+            for t_str in products_df["tags"].dropna():
+                parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
+                for p in parts:
+                    tag_name = p if p.startswith('#') else f"#{p}"
+                    existing_tags.add(tag_name)
+        existing_tag_list = sorted(list(existing_tags))
+
         st.subheader("➕ 새로운 추적 상품 추가")
 
         with st.form("add_product_form", clear_on_submit=True):
             input_url = st.text_input("무신사 상품 URL 또는 ID", placeholder="예: https://www.musinsa.com/app/goods/2081557 또는 2081557")
-            input_tags = st.text_input("커스텀 태그 (선택)", placeholder="예: #상의, #위시리스트")
+            
+            selected_existing_tags = st.multiselect(
+                "🏷️ 기존 태그에서 선택",
+                options=existing_tag_list,
+                placeholder="클릭하여 기존 태그 선택"
+            )
+            input_new_tags = st.text_input("✏️ 새 태그 직접 입력 (선택)", placeholder="예: #봄아우터, #가성비")
+            
             submit_button = st.form_submit_button("추적 등록하기")
 
         if submit_button:
@@ -351,6 +368,17 @@ with main_tab1:
                 if not goods_id:
                     st.error("❌ 입력된 내용에서 올바른 무신사 상품 ID(숫자)를 찾을 수 없습니다.")
                 else:
+                    # 선택된 태그와 직접 입력한 태그 조합
+                    combined_tags = list(selected_existing_tags)
+                    if input_new_tags.strip():
+                        new_parts = [p.strip() for p in re.split(r'[,; ]+', input_new_tags) if p.strip()]
+                        for p in new_parts:
+                            tag_name = p if p.startswith('#') else f"#{p}"
+                            if tag_name not in combined_tags:
+                                combined_tags.append(tag_name)
+                    
+                    final_tag_str = ", ".join(combined_tags) if combined_tags else ""
+
                     with st.spinner(f"상품 ID({goods_id}) 정보를 수집하고 DB에 등록하는 중..."):
                         info = get_musinsa_goods_info(goods_id)
                         if info:
@@ -359,7 +387,7 @@ with main_tab1:
                                 "goods_name": info["goods_name"],
                                 "brand_name": info["brand_name"],
                                 "category": "의류",
-                                "tags": input_tags,
+                                "tags": final_tag_str,
                                 "url": info["url"]
                             }
                             
@@ -390,16 +418,7 @@ with main_tab1:
         if tracked_df.empty:
             st.info("등록된 추적 상품이 없습니다.")
         else:
-            manage_tag_options = ["전체"]
-            if "tags" in tracked_df.columns:
-                extracted_tags = set()
-                for t_str in tracked_df["tags"].dropna():
-                    parts = [p.strip() for p in re.split(r'[,; ]+', str(t_str)) if p.strip()]
-                    for p in parts:
-                        tag_name = p if p.startswith('#') else f"#{p}"
-                        extracted_tags.add(tag_name)
-                manage_tag_options += sorted(list(extracted_tags))
-
+            manage_tag_options = ["전체"] + existing_tag_list
             selected_manage_tag = st.selectbox("🏷 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
 
             filtered_tracked = tracked_df.copy()
@@ -412,9 +431,6 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
-                # -------------------------------------------------
-                # 카드 누르면 앱 내부 '개별 상품 가격 추이' 상세로 이동
-                # -------------------------------------------------
                 cards_html_list = []
 
                 for _, row in filtered_tracked.iterrows():
@@ -474,7 +490,7 @@ with main_tab1:
                 st.markdown(full_grid_html, unsafe_allow_html=True)
 
                 # -------------------------------------------------
-                # 하단 전용 상품 관리 패널 (태그 수정 및 삭제)
+                # 하단 전용 상품 관리 패널 (스마트 태그 수정 및 삭제)
                 # -------------------------------------------------
                 st.markdown("#### ⚙️ 상품 관리 (태그 수정 / 삭제)")
                 
@@ -488,15 +504,33 @@ with main_tab1:
 
                 col_m1, col_m2 = st.columns([2, 1])
 
+                # 선택된 상품의 기존 태그 리스트 파싱
+                curr_prod_tag_str = selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else ""
+                curr_prod_tags = [p.strip() if p.strip().startswith('#') else f"#{p.strip()}" for p in re.split(r'[,; ]+', str(curr_prod_tag_str)) if p.strip()]
+                
+                edit_option_tags = sorted(list(set(existing_tag_list + curr_prod_tags)))
+
                 with col_m1:
                     with st.form(key=f"manage_tag_form_{selected_prod['goods_id']}"):
-                        new_tag_val = st.text_input(
-                            "태그 수정", 
-                            value=selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else "", 
-                            placeholder="예: #상의, #봄아우터"
+                        edit_selected = st.multiselect(
+                            "🏷️ 기존 태그 선택/수정", 
+                            options=edit_option_tags, 
+                            default=[t for t in curr_prod_tags if t in edit_option_tags]
                         )
+                        edit_new = st.text_input("✏️ 새 태그 추가 (선택)", placeholder="예: #봄아우터")
+                        
                         if st.form_submit_button("🏷️ 태그 저장", use_container_width=True):
-                            supabase.table("tracked_products").update({"tags": new_tag_val}).eq("goods_id", selected_prod["goods_id"]).execute()
+                            combined_edit = list(edit_selected)
+                            if edit_new.strip():
+                                new_parts = [p.strip() for p in re.split(r'[,; ]+', edit_new) if p.strip()]
+                                for p in new_parts:
+                                    tag_name = p if p.startswith('#') else f"#{p}"
+                                    if tag_name not in combined_edit:
+                                        combined_edit.append(tag_name)
+                            
+                            final_edit_tag_str = ", ".join(combined_edit) if combined_edit else ""
+
+                            supabase.table("tracked_products").update({"tags": final_edit_tag_str}).eq("goods_id", selected_prod["goods_id"]).execute()
                             st.toast("✅ 태그가 성공적으로 수정되었습니다!", icon="🎉")
                             time.sleep(0.3)
                             st.rerun()
@@ -511,7 +545,7 @@ with main_tab1:
                         st.rerun()
 
     # -----------------------------------------------------
-    # SUB TAB 2: 개별 상품 가격 추이 대시보드 ([브랜드명] 자동선택 지원)
+    # SUB TAB 2: 개별 상품 가격 추이 대시보드
     # -----------------------------------------------------
     elif selected_sub_tab == "📊 개별 상품 가격 추이":
         products_df = load_tracked_products()
@@ -544,7 +578,6 @@ with main_tab1:
             if filtered_products.empty:
                 st.warning("선택한 태그에 지정된 상품이 없습니다.")
             else:
-                # [브랜드명] 상품명 표기
                 filtered_products["display_name"] = filtered_products.apply(
                     lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r.get('brand_name')) and str(r.get('brand_name')).strip() else r['goods_name'],
                     axis=1
@@ -552,7 +585,6 @@ with main_tab1:
 
                 display_options = list(filtered_products["display_name"].unique())
 
-                # 카드를 통해 이동해 온 경우 해당 상품 자동 선택
                 default_idx = 0
                 if "selected_goods_id" in st.session_state:
                     target_gid = str(st.session_state["selected_goods_id"])
