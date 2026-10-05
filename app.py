@@ -11,7 +11,7 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 패딩 및 여백 최적화 CSS (링크 기본 스타일 및 커서 보정)
+# 모바일 패딩 및 여백 최적화 CSS (라디오 버튼 탭 스타일 지정)
 # ---------------------------------------------------------
 st.markdown("""<style>
 .main .block-container {
@@ -29,6 +29,28 @@ a {
     text-decoration: none !important;
     color: inherit !important;
 }
+
+/* Sub Tab 세그먼트 버튼 모바일 커스텀 */
+div[data-testid="stRadio"] > div {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 4px !important;
+    width: 100% !important;
+}
+div[data-testid="stRadio"] label {
+    flex: 1 !important;
+    text-align: center !important;
+    background: #f1f3f5 !important;
+    padding: 6px 4px !important;
+    border-radius: 6px !important;
+    font-size: 11px !important;
+    font-weight: bold !important;
+    cursor: pointer !important;
+}
+div[data-testid="stRadio"] label[data-checked="true"] {
+    background: #228be6 !important;
+    color: white !important;
+}
 </style>""", unsafe_allow_html=True)
 
 st.title("🛍️ 무신사 스마트 트래커")
@@ -41,6 +63,18 @@ try:
 except Exception as e:
     st.error(f"❌ Supabase 연결 실패: {e}")
     st.stop()
+
+# ---------------------------------------------------------
+# URL Query Parameter 탐지 (카드 클릭 시 앱 내부 이동 처리)
+# ---------------------------------------------------------
+if "sub_tab" not in st.session_state:
+    st.session_state["sub_tab"] = "➕ 추적 상품 관리"
+
+qp = st.query_params
+if qp.get("tab") == "detail" and "goods_id" in qp:
+    st.session_state["sub_tab"] = "📊 개별 상품 가격 추이"
+    st.session_state["selected_goods_id"] = str(qp.get("goods_id"))
+    st.query_params.clear()
 
 # ---------------------------------------------------------
 # 무신사 크롤링 및 파싱 함수
@@ -273,16 +307,25 @@ main_tab1, main_tab2 = st.tabs([
 # MAIN TAB 1: 무신사 개별 상품 트래커
 # =========================================================
 with main_tab1:
-    musinsa_tab1, musinsa_tab2, musinsa_tab3 = st.tabs([
-        "➕ 추적 상품 관리", 
-        "📊 개별 상품 가격 추이", 
-        "⚡ 실시간 조회 (테스트)"
-    ])
+    sub_tabs = ["➕ 추적 상품 관리", "📊 개별 상품 가격 추이", "⚡ 실시간 조회 (테스트)"]
+    
+    current_index = sub_tabs.index(st.session_state["sub_tab"]) if st.session_state["sub_tab"] in sub_tabs else 0
+    selected_sub_tab = st.radio(
+        "서브메뉴", 
+        sub_tabs, 
+        index=current_index, 
+        horizontal=True, 
+        label_visibility="collapsed",
+        key="sub_tab_radio_select"
+    )
+    st.session_state["sub_tab"] = selected_sub_tab
+
+    st.divider()
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 추적 상품 관리 (클릭 시 상세 페이지 이동)
+    # SUB TAB 1: 무신사 추적 상품 관리 (클릭 시 앱 내부 상세로 이동)
     # -----------------------------------------------------
-    with musinsa_tab1:
+    if selected_sub_tab == "➕ 추적 상품 관리":
         products_df = load_tracked_products()
         tracked_df = products_df
 
@@ -370,14 +413,13 @@ with main_tab1:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
                 # -------------------------------------------------
-                # 카드 네모박스 전체 클릭 시 상세 페이지 이동 링크 적용
+                # 카드 누르면 앱 내부 '개별 상품 가격 추이' 상세로 이동
                 # -------------------------------------------------
                 cards_html_list = []
 
                 for _, row in filtered_tracked.iterrows():
                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
-                    prod_url = row.get("url") if pd.notna(row.get("url")) and str(row.get("url")).startswith("http") else f"https://www.musinsa.com/products/{row['goods_id']}"
 
                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
                     
@@ -408,7 +450,7 @@ with main_tab1:
                             price_html_str = f"{c_price:,}원"
 
                     single_card = (
-                        f'<a href="{prod_url}" target="_blank" style="text-decoration:none; color:inherit; display:block;">'
+                        f'<a href="?goods_id={row["goods_id"]}&tab=detail" target="_self" style="text-decoration:none; color:inherit; display:block;">'
                         f'<div style="background:{bg_color}; border:1px solid {border_color}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer;">'
                         f'<div>'
                         f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
@@ -469,9 +511,9 @@ with main_tab1:
                         st.rerun()
 
     # -----------------------------------------------------
-    # SUB TAB 2: 개별 상품 가격 추이 대시보드 ([브랜드명] 상품명 검색 표기)
+    # SUB TAB 2: 개별 상품 가격 추이 대시보드 ([브랜드명] 자동선택 지원)
     # -----------------------------------------------------
-    with musinsa_tab2:
+    elif selected_sub_tab == "📊 개별 상품 가격 추이":
         products_df = load_tracked_products()
         logs_df = load_price_logs()
 
@@ -502,14 +544,26 @@ with main_tab1:
             if filtered_products.empty:
                 st.warning("선택한 태그에 지정된 상품이 없습니다.")
             else:
-                # 드롭다운에 [브랜드명] 상품명 표기
+                # [브랜드명] 상품명 표기
                 filtered_products["display_name"] = filtered_products.apply(
                     lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r.get('brand_name')) and str(r.get('brand_name')).strip() else r['goods_name'],
                     axis=1
                 )
 
+                display_options = list(filtered_products["display_name"].unique())
+
+                # 카드를 통해 이동해 온 경우 해당 상품 자동 선택
+                default_idx = 0
+                if "selected_goods_id" in st.session_state:
+                    target_gid = str(st.session_state["selected_goods_id"])
+                    target_row = filtered_products[filtered_products["goods_id"].astype(str) == target_gid]
+                    if not target_row.empty:
+                        target_disp = target_row.iloc[0]["display_name"]
+                        if target_disp in display_options:
+                            default_idx = display_options.index(target_disp)
+
                 with col_f2:
-                    selected_display_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["display_name"].unique())
+                    selected_display_name = st.selectbox("🛍 조회할 상품 선택", display_options, index=default_idx)
 
                 product_info = filtered_products[filtered_products["display_name"] == selected_display_name].iloc[0]
                 g_id = product_info["goods_id"]
@@ -591,7 +645,7 @@ with main_tab1:
     # -----------------------------------------------------
     # SUB TAB 3: 무신사 실시간 조회
     # -----------------------------------------------------
-    with musinsa_tab3:
+    elif selected_sub_tab == "⚡ 실시간 조회 (테스트)":
         st.subheader("⚡ 실시간 가격 조회 (DB 저장 X)")
         test_input = st.text_input("테스트할 무신사 상품 URL 또는 ID", value="2081557")
         if st.button("🔍 실시간 조회"):
