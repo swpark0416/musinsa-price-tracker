@@ -11,7 +11,7 @@ import time
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
 
 # ---------------------------------------------------------
-# 모바일 패딩 및 여백 최적화 CSS
+# 모바일 패딩 및 여백 최적화 CSS (링크 기본 스타일 및 커서 보정)
 # ---------------------------------------------------------
 st.markdown("""<style>
 .main .block-container {
@@ -21,9 +21,13 @@ st.markdown("""<style>
     max-width: 100vw !important;
     overflow-x: hidden !important;
 }
-p, span, div, h1, h2, h3, h4 {
+p, span, div, h1, h2, h3, h4, a {
     word-break: break-all !important;
     overflow-wrap: break-word !important;
+}
+a {
+    text-decoration: none !important;
+    color: inherit !important;
 }
 </style>""", unsafe_allow_html=True)
 
@@ -269,7 +273,6 @@ main_tab1, main_tab2 = st.tabs([
 # MAIN TAB 1: 무신사 개별 상품 트래커
 # =========================================================
 with main_tab1:
-    # '➕ 추적 상품 관리'를 첫 화면으로 배치
     musinsa_tab1, musinsa_tab2, musinsa_tab3 = st.tabs([
         "➕ 추적 상품 관리", 
         "📊 개별 상품 가격 추이", 
@@ -277,11 +280,11 @@ with main_tab1:
     ])
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 추적 상품 관리 (첫 화면 자동 표시)
+    # SUB TAB 1: 무신사 추적 상품 관리 (클릭 시 상세 페이지 이동)
     # -----------------------------------------------------
     with musinsa_tab1:
         products_df = load_tracked_products()
-        tracked_df = products_df  # NameError 방지 변수 할당
+        tracked_df = products_df
 
         if "today_synced" not in st.session_state and not products_df.empty:
             with st.spinner("🔄 최신 가격 정보를 자동으로 확인하는 중..."):
@@ -354,7 +357,7 @@ with main_tab1:
                         extracted_tags.add(tag_name)
                 manage_tag_options += sorted(list(extracted_tags))
 
-            selected_manage_tag = st.selectbox("🏷️️ 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
+            selected_manage_tag = st.selectbox("🏷 태그 필터링", manage_tag_options, key="manage_tab_tag_select")
 
             filtered_tracked = tracked_df.copy()
             if selected_manage_tag != "전체":
@@ -367,13 +370,14 @@ with main_tab1:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
                 # -------------------------------------------------
-                # 전날 대비 가격 변동 감지 및 컬러풀 3열 카드 렌더링
+                # 카드 네모박스 전체 클릭 시 상세 페이지 이동 링크 적용
                 # -------------------------------------------------
                 cards_html_list = []
 
                 for _, row in filtered_tracked.iterrows():
                     brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
+                    prod_url = row.get("url") if pd.notna(row.get("url")) and str(row.get("url")).startswith("http") else f"https://www.musinsa.com/products/{row['goods_id']}"
 
                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
                     
@@ -382,7 +386,6 @@ with main_tab1:
                     border_color = "#e9ecef"   # 기본 테두리: 연회색
 
                     if not p_logs.empty:
-                        # 일자별 가격 로그 중 중복을 제거한 최근 기록 비교
                         p_logs_daily = p_logs.drop_duplicates(subset=["date_str"], keep="last")
                         
                         latest_p = p_logs_daily.iloc[-1]
@@ -390,15 +393,12 @@ with main_tab1:
                         n_price = int(latest_p['normal_price'])
                         disc = latest_p.get('discount_rate', 0)
 
-                        # 전날(이전) 가격과 비교하여 배경색 결정
                         if len(p_logs_daily) >= 2:
                             prev_price = int(p_logs_daily.iloc[-2]['price'])
                             if c_price < prev_price:
-                                # 가격 하락 -> 파란색 계열 💙
                                 bg_color = "#e7f5ff"
                                 border_color = "#74c0fc"
                             elif c_price > prev_price:
-                                # 가격 상승 -> 빨간색 계열 ❤️
                                 bg_color = "#fff5f5"
                                 border_color = "#ffc9c9"
 
@@ -408,7 +408,8 @@ with main_tab1:
                             price_html_str = f"{c_price:,}원"
 
                     single_card = (
-                        f'<div style="background:{bg_color}; border:1px solid {border_color}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between;">'
+                        f'<a href="{prod_url}" target="_blank" style="text-decoration:none; color:inherit; display:block;">'
+                        f'<div style="background:{bg_color}; border:1px solid {border_color}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer;">'
                         f'<div>'
                         f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
                         f'<div style="font-size:10px; font-weight:bold; color:#212529; line-height:1.25; height:25px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin:2px 0 4px 0;">{row["goods_name"]}</div>'
@@ -418,6 +419,7 @@ with main_tab1:
                         f'<div style="font-size:9px; color:#2b8a3e; background:#e6fcf5; display:inline-block; padding:1px 4px; border-radius:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">🏷️ {curr_tag}</div>'
                         f'</div>'
                         f'</div>'
+                        f'</a>'
                     )
                     cards_html_list.append(single_card)
 
@@ -467,7 +469,7 @@ with main_tab1:
                         st.rerun()
 
     # -----------------------------------------------------
-    # SUB TAB 2: 개별 상품 가격 추이 대시보드
+    # SUB TAB 2: 개별 상품 가격 추이 대시보드 ([브랜드명] 상품명 검색 표기)
     # -----------------------------------------------------
     with musinsa_tab2:
         products_df = load_tracked_products()
@@ -500,10 +502,16 @@ with main_tab1:
             if filtered_products.empty:
                 st.warning("선택한 태그에 지정된 상품이 없습니다.")
             else:
-                with col_f2:
-                    selected_goods_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["goods_name"].unique())
+                # 드롭다운에 [브랜드명] 상품명 표기
+                filtered_products["display_name"] = filtered_products.apply(
+                    lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r.get('brand_name')) and str(r.get('brand_name')).strip() else r['goods_name'],
+                    axis=1
+                )
 
-                product_info = filtered_products[filtered_products["goods_name"] == selected_goods_name].iloc[0]
+                with col_f2:
+                    selected_display_name = st.selectbox("🛍 조회할 상품 선택", filtered_products["display_name"].unique())
+
+                product_info = filtered_products[filtered_products["display_name"] == selected_display_name].iloc[0]
                 g_id = product_info["goods_id"]
 
                 brand = product_info.get("brand_name") if "brand_name" in product_info and pd.notna(product_info.get("brand_name")) else ""
@@ -618,7 +626,6 @@ with main_tab2:
     if products_df.empty:
         st.info("추적 중인 상품이 없습니다.")
     else:
-        # 태그 목록 구성 ('전체' 옵션 포함)
         tag_options = ["전체"]
         if "tags" in products_df.columns:
             extracted_tags = set()
