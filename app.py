@@ -323,7 +323,7 @@ with main_tab1:
     st.divider()
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 추적 상품 관리 (스마트 태그 선택/생성)
+    # SUB TAB 1: 무신사 추적 상품 관리 (최저가 금색 테두리 적용)
     # -----------------------------------------------------
     if selected_sub_tab == "➕ 추적 상품 관리":
         products_df = load_tracked_products()
@@ -368,7 +368,6 @@ with main_tab1:
                 if not goods_id:
                     st.error("❌ 입력된 내용에서 올바른 무신사 상품 ID(숫자)를 찾을 수 없습니다.")
                 else:
-                    # 선택된 태그와 직접 입력한 태그 조합
                     combined_tags = list(selected_existing_tags)
                     if input_new_tags.strip():
                         new_parts = [p.strip() for p in re.split(r'[,; ]+', input_new_tags) if p.strip()]
@@ -441,7 +440,7 @@ with main_tab1:
                     
                     price_html_str = "수집중"
                     bg_color = "#ffffff"       # 기본 배경색: 흰색
-                    border_color = "#e9ecef"   # 기본 테두리: 연회색
+                    border_style = "1px solid #e9ecef"   # 기본 테두리: 연회색
 
                     if not p_logs.empty:
                         p_logs_daily = p_logs.drop_duplicates(subset=["date_str"], keep="last")
@@ -451,14 +450,22 @@ with main_tab1:
                         n_price = int(latest_p['normal_price'])
                         disc = latest_p.get('discount_rate', 0)
 
+                        initial_price = int(p_logs_daily.iloc[0]['price'])  # 최초 등록 가격
+                        min_price = int(p_logs['price'].min())              # 역대 최저가
+
+                        # 1. 전날 대비 배경색 설정 (하락: 연파랑 / 상승: 연분홍)
                         if len(p_logs_daily) >= 2:
                             prev_price = int(p_logs_daily.iloc[-2]['price'])
                             if c_price < prev_price:
                                 bg_color = "#e7f5ff"
-                                border_color = "#74c0fc"
+                                border_style = "1px solid #74c0fc"
                             elif c_price > prev_price:
                                 bg_color = "#fff5f5"
-                                border_color = "#ffc9c9"
+                                border_style = "1px solid #ffc9c9"
+
+                        # 2. [핵심] 역대 최저가이면서 최초 가격보다 하락한 경우 -> 금색 테두리 강조!
+                        if c_price == min_price and c_price < initial_price:
+                            border_style = "2px solid #fcc419"
 
                         if n_price > c_price and disc > 0:
                             price_html_str = f"<span style='color:#d9480f;'>{disc}%</span> {c_price:,}원"
@@ -467,7 +474,7 @@ with main_tab1:
 
                     single_card = (
                         f'<a href="?goods_id={row["goods_id"]}&tab=detail" target="_self" style="text-decoration:none; color:inherit; display:block;">'
-                        f'<div style="background:{bg_color}; border:1px solid {border_color}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer;">'
+                        f'<div style="background:{bg_color}; border:{border_style}; border-radius:6px; padding:6px; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer;">'
                         f'<div>'
                         f'<div style="font-size:9px; color:#868e96; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{brand}</div>'
                         f'<div style="font-size:10px; font-weight:bold; color:#212529; line-height:1.25; height:25px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin:2px 0 4px 0;">{row["goods_name"]}</div>'
@@ -504,7 +511,6 @@ with main_tab1:
 
                 col_m1, col_m2 = st.columns([2, 1])
 
-                # 선택된 상품의 기존 태그 리스트 파싱
                 curr_prod_tag_str = selected_prod.get("tags") if pd.notna(selected_prod.get("tags")) else ""
                 curr_prod_tags = [p.strip() if p.strip().startswith('#') else f"#{p.strip()}" for p in re.split(r'[,; ]+', str(curr_prod_tag_str)) if p.strip()]
                 
