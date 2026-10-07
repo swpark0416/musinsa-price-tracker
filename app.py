@@ -146,7 +146,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다 (타임아웃 3초 적용)."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다 (타임아웃 3초)."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -252,7 +252,7 @@ def load_price_logs():
         if not df.empty:
             df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
             df = df.dropna(subset=["created_at"])
-            df = df.sort_values("created_at", ascending=True) # 날짜 오름차순 정렬 보장
+            df = df.sort_values("created_at", ascending=True) # 생성시간 기준 오름차순 정렬
 
             df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
             df["date_str"] = df["created_at_kst"].dt.strftime("%m/%d")         # 차트용 MM/DD 표기
@@ -346,7 +346,7 @@ with main_tab1:
         products_df = load_tracked_products()
         tracked_df = products_df
 
-        # 앱 첫 접속 시 자동 동기화 실행 (타임아웃 3초)
+        # 앱 첫 접속 시 자동 동기화 실행
         if "today_synced" not in st.session_state and not products_df.empty:
             with st.spinner("🔄 오늘자 최신 가격 정보를 자동으로 확인하는 중..."):
                 sync_today_prices_if_needed(products_df)
@@ -640,7 +640,7 @@ with main_tab1:
                 product_logs = logs_df[logs_df["goods_id"] == g_id] if not logs_df.empty else pd.DataFrame()
                 
                 if not product_logs.empty:
-                    product_logs = product_logs.sort_values("created_at", ascending=True) # 시간순 오름차순
+                    product_logs = product_logs.sort_values("created_at", ascending=True)
                     latest_row = product_logs.iloc[-1]
                     min_price = int(product_logs["price"].min())
                     max_discount = product_logs["discount_rate"].max()
@@ -655,6 +655,9 @@ with main_tab1:
 
                 if not product_logs.empty:
                     st.markdown("### 📈 가격 및 할인율 변동 추이")
+                    
+                    # 오름차순 고정된 날짜 배열 추출
+                    sorted_dates = product_logs["date_str"].unique().tolist()
                     
                     p_min = int(product_logs["price"].min())
                     p_max = int(product_logs["price"].max())
@@ -671,7 +674,12 @@ with main_tab1:
                         marker=dict(size=10),
                         hovertemplate="<b>날짜:</b> %{x}<br><b>판매가:</b> %{y:,}원<extra></extra>"
                     )
-                    fig_price.update_xaxes(type='category', tickangle=0)
+                    fig_price.update_xaxes(
+                        type='category', 
+                        categoryorder='array', 
+                        categoryarray=sorted_dates, 
+                        tickangle=0
+                    )
                     fig_price.update_yaxes(
                         range=[max(0, p_min - p_pad), p_max + p_pad], 
                         tickformat=",d", 
@@ -699,7 +707,12 @@ with main_tab1:
                         marker=dict(size=10),
                         hovertemplate="<b>날짜:</b> %{x}<br><b>할인율:</b> %{y}%<extra></extra>"
                     )
-                    fig_discount.update_xaxes(type='category', tickangle=0)
+                    fig_discount.update_xaxes(
+                        type='category', 
+                        categoryorder='array', 
+                        categoryarray=sorted_dates, 
+                        tickangle=0
+                    )
                     fig_discount.update_yaxes(dtick=5, range=[d_min, d_max], ticksuffix="%")
                     fig_discount.update_layout(margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_discount, use_container_width=True)
@@ -774,8 +787,12 @@ with main_tab2:
                 tag_logs = logs_df[logs_df["goods_id"].isin(tag_goods_ids)].copy()
 
                 if not tag_logs.empty:
-                    # 시간순 오름차순 정렬 보장
+                    # 시간 오름차순 정렬
                     tag_logs = tag_logs.sort_values("created_at", ascending=True)
+                    
+                    # 정렬된 날짜 리스트 추출
+                    sorted_dates = tag_logs["date_str"].unique().tolist()
+
                     tag_logs = tag_logs.merge(tagged_products[["goods_id", "goods_name", "brand_name"]], on="goods_id", how="left")
                     tag_logs["display_name"] = tag_logs.apply(
                         lambda r: f"[{r['brand_name']}] {r['goods_name']}" if pd.notna(r['brand_name']) and r['brand_name'] else r['goods_name'],
@@ -800,7 +817,13 @@ with main_tab2:
                         marker=dict(size=8),
                         hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
                     )
-                    fig_tag.update_xaxes(type='category', tickangle=0)
+                    # 명시적 날짜 순서 배열(categoryarray) 지정으로 정렬 오류 방지
+                    fig_tag.update_xaxes(
+                        type='category', 
+                        categoryorder='array', 
+                        categoryarray=sorted_dates, 
+                        tickangle=0
+                    )
                     fig_tag.update_yaxes(
                         range=[max(0, t_min - t_pad), t_max + t_pad], 
                         tickformat=",d", 
