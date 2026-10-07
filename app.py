@@ -77,7 +77,7 @@ if qp.get("tab") == "detail" and "goods_id" in qp:
     st.query_params.clear()
 
 # ---------------------------------------------------------
-# 무신사 크롤링 및 파싱 함수 (타임아웃 축소로 멈춤 방지)
+# 무신사 크롤링 및 파싱 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
     """공유 링크, 단축 URL, 일반 웹주소에서 진짜 상품 ID를 추출합니다."""
@@ -88,7 +88,7 @@ def parse_goods_id(url_or_id):
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0"
         }
         try:
-            res = requests.get(text, headers=headers, allow_redirects=True, timeout=3)
+            res = requests.get(text, headers=headers, allow_redirects=True, timeout=5)
             text = res.url
             
             match_body = re.search(r'musinsa\.com/(?:app/goods|products)/(\d+)', res.text)
@@ -146,7 +146,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다 (타임아웃 2초 적용)."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다 (타임아웃 8초 원복)."""
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
         "Accept": "application/json, text/html, */*",
@@ -156,14 +156,15 @@ def get_musinsa_goods_info(goods_id):
 
     endpoints = [
         f"https://goods-detail.musinsa.com/goods/{goods_id}",
-        f"https://www.musinsa.com/products/{goods_id}"
+        f"https://www.musinsa.com/products/{goods_id}",
+        f"https://www.musinsa.com/app/goods/{goods_id}"
     ]
 
     session = requests.Session()
 
     for url in endpoints:
         try:
-            res = session.get(url, headers=headers, timeout=2.5)
+            res = session.get(url, headers=headers, timeout=8)
 
             if res.status_code == 200:
                 raw_text = res.text
@@ -200,14 +201,16 @@ def get_musinsa_goods_info(goods_id):
 
                 name_match = (
                     re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
-                    re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text)
+                    re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
+                    re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
                 )
                 price_match = (
                     re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
-                    re.search(r'"price"\s*:\s*(\d+)', raw_text)
+                    re.search(r'"price"\s*:\s*(\d+)', raw_text) or
+                    re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
                 )
                 normal_price_match = (
-                    re.search(r'"normalPrice"\s*:\s*(\d+)"', raw_text) or
+                    re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
                     re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
                 )
 
@@ -251,7 +254,8 @@ def load_price_logs():
             df = df.dropna(subset=["created_at"])
             
             df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
-            df["date_str"] = df["created_at_kst"].dt.strftime("%Y-%m-%d")
+            df["date_str"] = df["created_at_kst"].dt.strftime("%m/%d")         # 차트용 MM/DD 표기
+            df["full_date_str"] = df["created_at_kst"].dt.strftime("%Y-%m-%d") # 당일 최신화 확인용 YYYY-MM-DD
             
             df["discount_rate"] = df.apply(
                 lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
@@ -261,10 +265,10 @@ def load_price_logs():
     except Exception:
         return pd.DataFrame()
 
-# 수동 가격 동기화 함수
-def sync_today_prices(products_df):
+# 앱 접속 시 오늘 가격 자동 동기화 함수
+def sync_today_prices_if_needed(products_df):
     if products_df.empty:
-        return 0
+        return
 
     today_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     
@@ -277,8 +281,8 @@ def sync_today_prices(products_df):
 
     unsynced_products = products_df[~products_df["goods_id"].isin(synced_goods_ids)]
     
-    updated_count = 0
     if not unsynced_products.empty:
+        updated_count = 0
         for idx, row in unsynced_products.iterrows():
             g_id = row["goods_id"]
             info = get_musinsa_goods_info(g_id)
@@ -293,8 +297,19 @@ def sync_today_prices(products_df):
                     updated_count += 1
                 except Exception:
                     pass
-            time.sleep(0.2)
-    return updated_count
+                time.sleep(0.3)
+        
+        if updated_count > 0:
+            st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
+
+# 당일 최신화 상태 확인 헬퍼
+def get_today_sync_status_badge(logs_df):
+    today_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    if not logs_df.empty and "full_date_str" in logs_df.columns:
+        is_synced = (logs_df["full_date_str"] == today_str).any()
+        if is_synced:
+            return f"✅ 당일 최신화 완료 ({today_str})"
+    return f"⚠️ 당일 가격 미업데이트 ({today_str})"
 
 # =========================================================
 # 최상위 2개 메인 탭 구성
@@ -324,25 +339,19 @@ with main_tab1:
     st.divider()
 
     # -----------------------------------------------------
-    # SUB TAB 1: 무신사 추적 상품 관리
+    # SUB TAB 1: 무신사 추적 상품 관리 (자동 동기화 복원)
     # -----------------------------------------------------
     if selected_sub_tab == "➕ 추적 상품 관리":
         products_df = load_tracked_products()
         tracked_df = products_df
-        logs_df = load_price_logs()
 
-        # 상단 수동 동기화 버튼
-        col_s1, col_s2 = st.columns([3, 1])
-        with col_s2:
-            if st.button("🔄 가격 동기화", use_container_width=True):
-                with st.spinner("최신 가격 수집 중..."):
-                    cnt = sync_today_prices(products_df)
-                    if cnt > 0:
-                        st.toast(f"✅ {cnt}건의 가격 정보가 동기화되었습니다!", icon="🎉")
-                    else:
-                        st.toast("이미 최신 상태입니다.", icon="ℹ️")
-                    time.sleep(0.3)
-                    st.rerun()
+        # 앱 첫 접속 시 자동 동기화 실행 (타임아웃 8초)
+        if "today_synced" not in st.session_state and not products_df.empty:
+            with st.spinner("🔄 오늘자 최신 가격 정보를 자동으로 확인하는 중..."):
+                sync_today_prices_if_needed(products_df)
+            st.session_state["today_synced"] = True
+
+        logs_df = load_price_logs()
 
         # DB에 등록된 기존 태그 추출
         existing_tags = set()
@@ -451,7 +460,7 @@ with main_tab1:
                     border_style = "1px solid #e9ecef"   # 기본 테두리: 연회색
 
                     if not p_logs.empty:
-                        p_logs_daily = p_logs.drop_duplicates(subset=["date_str"], keep="last")
+                        p_logs_daily = p_logs.drop_duplicates(subset=["full_date_str"], keep="last")
                         
                         latest_p = p_logs_daily.iloc[-1]
                         c_price = int(latest_p['price'])
@@ -471,7 +480,7 @@ with main_tab1:
                                 bg_color = "#fff5f5"
                                 border_style = "1px solid #ffc9c9"
 
-                        # 2. 역대 최저가이면서 최초 가격보다 하락한 경우 -> 금색 테두리 강조!
+                        # 2. 역대 최저가이면서 최초 가격보다 하락한 경우 -> 금색 테두리 강조
                         if c_price == min_price and c_price < initial_price:
                             border_style = "2px solid #fcc419"
 
@@ -647,13 +656,13 @@ with main_tab1:
                         x="date_str", 
                         y="price", 
                         markers=True,
-                        labels={"date_str": "날짜", "price": "판매가(원)"}
+                        labels={"date_str": "날짜 (월/일)", "price": "판매가(원)"}
                     )
                     fig_price.update_traces(
                         marker=dict(size=10),
                         hovertemplate="<b>날짜:</b> %{x}<br><b>판매가:</b> %{y:,}원<extra></extra>"
                     )
-                    fig_price.update_xaxes(type='category')
+                    fig_price.update_xaxes(type='category', tickangle=0)
                     fig_price.update_yaxes(
                         range=[max(0, p_min - p_pad), p_max + p_pad], 
                         tickformat=",d", 
@@ -675,13 +684,13 @@ with main_tab1:
                         x="date_str", 
                         y="discount_rate", 
                         markers=True,
-                        labels={"date_str": "날짜", "discount_rate": "할인율 (%)"}
+                        labels={"date_str": "날짜 (월/일)", "discount_rate": "할인율 (%)"}
                     )
                     fig_discount.update_traces(
                         marker=dict(size=10),
                         hovertemplate="<b>날짜:</b> %{x}<br><b>할인율:</b> %{y}%<extra></extra>"
                     )
-                    fig_discount.update_xaxes(type='category')
+                    fig_discount.update_xaxes(type='category', tickangle=0)
                     fig_discount.update_yaxes(dtick=5, range=[d_min, d_max], ticksuffix="%")
                     fig_discount.update_layout(margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_discount, use_container_width=True)
@@ -723,6 +732,9 @@ with main_tab2:
     products_df = load_tracked_products()
     logs_df = load_price_logs()
 
+    # 당일 최신화 상태 배지 생성
+    sync_badge = get_today_sync_status_badge(logs_df)
+
     if products_df.empty:
         st.info("추적 중인 상품이 없습니다.")
     else:
@@ -740,13 +752,13 @@ with main_tab2:
 
         if selected_tag == "전체":
             tagged_products = products_df.copy()
-            st.success(f"**전체** 상품: 총 **{len(tagged_products)}개**")
+            st.success(f"**전체** 상품: 총 **{len(tagged_products)}개** | {sync_badge}")
         else:
             clean_tag = selected_tag.lstrip('#')
             tagged_products = products_df[
                 products_df["tags"].fillna('').str.contains(clean_tag, case=False, regex=False)
             ]
-            st.success(f"**{selected_tag}** 태그 지정 상품: 총 **{len(tagged_products)}개**")
+            st.success(f"**{selected_tag}** 태그 지정 상품: 총 **{len(tagged_products)}개** | {sync_badge}")
 
         if tagged_products.empty:
             st.info(f"현재 선택한 조건에 해당하는 상품이 없습니다.")
@@ -774,13 +786,13 @@ with main_tab2:
                         y="price",
                         color="display_name",
                         markers=True,
-                        labels={"date_str": "날짜", "price": "판매가(원)", "display_name": "상품명"}
+                        labels={"date_str": "날짜 (월/일)", "price": "판매가(원)", "display_name": "상품명"}
                     )
                     fig_tag.update_traces(
                         marker=dict(size=8),
                         hovertemplate="<b>%{fullData.name}</b><br>날짜: %{x}<br>판매가: %{y:,}원<extra></extra>"
                     )
-                    fig_tag.update_xaxes(type='category')
+                    fig_tag.update_xaxes(type='category', tickangle=0)
                     fig_tag.update_yaxes(
                         range=[max(0, t_min - t_pad), t_max + t_pad], 
                         tickformat=",d", 
