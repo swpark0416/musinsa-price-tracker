@@ -88,7 +88,7 @@ def parse_goods_id(url_or_id):
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0"
         }
         try:
-            res = requests.get(text, headers=headers, allow_redirects=True, timeout=3)
+            res = requests.get(text, headers=headers, allow_redirects=True, timeout=5)
             text = res.url
             
             match_body = re.search(r'musinsa\.com/(?:app/goods|products)/(\d+)', res.text)
@@ -146,94 +146,104 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다 (타임아웃 3초)."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
-        "Accept": "application/json, text/html, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": f"https://www.musinsa.com/products/{goods_id}"
-    }
+    """무신사 상품 정보 및 브랜드명을 수집합니다 (우회 엔드포인트 및 타임아웃 확장)."""
+    headers_list = [
+        {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
+            "Accept": "application/json, text/html, */*",
+            "Accept-Language": "ko-KR,ko;q=0.9",
+            "Referer": f"https://www.musinsa.com/products/{goods_id}"
+        },
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": "https://www.musinsa.com/"
+        }
+    ]
 
     endpoints = [
         f"https://goods-detail.musinsa.com/goods/{goods_id}",
+        f"https://api.musinsa.com/api2/dp/v1/goods/{goods_id}",
         f"https://www.musinsa.com/products/{goods_id}",
         f"https://www.musinsa.com/app/goods/{goods_id}"
     ]
 
     session = requests.Session()
 
-    for url in endpoints:
-        try:
-            res = session.get(url, headers=headers, timeout=3)
+    for headers in headers_list:
+        for url in endpoints:
+            try:
+                res = session.get(url, headers=headers, timeout=5)
 
-            if res.status_code == 200:
-                raw_text = res.text
+                if res.status_code == 200:
+                    raw_text = res.text
 
-                try:
-                    data = res.json()
-                    if isinstance(data, dict):
-                        if "data" in data and isinstance(data["data"], dict):
-                            data = data["data"]
+                    try:
+                        data = res.json()
+                        if isinstance(data, dict):
+                            if "data" in data and isinstance(data["data"], dict):
+                                data = data["data"]
 
-                        goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
-                        brand_name = extract_brand_name(raw_text, data)
+                            goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
+                            brand_name = extract_brand_name(raw_text, data)
 
-                        price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
-                        normal_price = data.get("normalPrice") or data.get("originalPrice") or price
+                            price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
+                            normal_price = data.get("normalPrice") or data.get("originalPrice") or price
 
-                        if goods_name and price:
-                            price = int(price)
-                            normal_price = int(normal_price) if normal_price else price
-                            discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
+                            if goods_name and price:
+                                price = int(price)
+                                normal_price = int(normal_price) if normal_price else price
+                                discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
-                            return {
-                                "goods_id": str(goods_id),
-                                "goods_name": goods_name,
-                                "brand_name": brand_name,
-                                "category": "의류",
-                                "normal_price": normal_price,
-                                "price": price,
-                                "discount_rate": discount_rate,
-                                "url": f"https://www.musinsa.com/products/{goods_id}"
-                            }
-                except Exception:
-                    pass
+                                return {
+                                    "goods_id": str(goods_id),
+                                    "goods_name": goods_name,
+                                    "brand_name": brand_name,
+                                    "category": "의류",
+                                    "normal_price": normal_price,
+                                    "price": price,
+                                    "discount_rate": discount_rate,
+                                    "url": f"https://www.musinsa.com/products/{goods_id}"
+                                }
+                    except Exception:
+                        pass
 
-                name_match = (
-                    re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
-                    re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
-                )
-                price_match = (
-                    re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
-                    re.search(r'"price"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
-                )
-                normal_price_match = (
-                    re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
-                )
+                    name_match = (
+                        re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
+                        re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
+                        re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
+                    )
+                    price_match = (
+                        re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
+                        re.search(r'"price"\s*:\s*(\d+)', raw_text) or
+                        re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
+                    )
+                    normal_price_match = (
+                        re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
+                        re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
+                    )
 
-                if name_match and price_match:
-                    goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
-                    brand_name = extract_brand_name(raw_text)
-                    price = int(price_match.group(1))
-                    normal_price = int(normal_price_match.group(1)) if normal_price_match else price
-                    discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
+                    if name_match and price_match:
+                        goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
+                        brand_name = extract_brand_name(raw_text)
+                        price = int(price_match.group(1))
+                        normal_price = int(normal_price_match.group(1)) if normal_price_match else price
+                        discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
-                    return {
-                        "goods_id": str(goods_id),
-                        "goods_name": goods_name,
-                        "brand_name": brand_name,
-                        "category": "의류",
-                        "normal_price": normal_price,
-                        "price": price,
-                        "discount_rate": discount_rate,
-                        "url": f"https://www.musinsa.com/products/{goods_id}"
-                    }
+                        return {
+                            "goods_id": str(goods_id),
+                            "goods_name": goods_name,
+                            "brand_name": brand_name,
+                            "category": "의류",
+                            "normal_price": normal_price,
+                            "price": price,
+                            "discount_rate": discount_rate,
+                            "url": f"https://www.musinsa.com/products/{goods_id}"
+                        }
 
-        except Exception:
-            continue
+            except Exception:
+                continue
 
     return None
 
@@ -300,7 +310,7 @@ def sync_today_prices_if_needed(products_df, force=False):
                     updated_count += 1
                 except Exception:
                     pass
-                time.sleep(0.2)
+                time.sleep(0.3)
     return updated_count
 
 # 당일 최신화 상태 확인 헬퍼
@@ -368,7 +378,10 @@ with main_tab1:
             if st.button("🔄 가격 업데이트", use_container_width=True, key="manual_price_sync_btn"):
                 with st.spinner("🔄 오늘 자 최신 가격 수집 중..."):
                     updated_cnt = sync_today_prices_if_needed(products_df, force=True)
-                st.toast(f"⚡ 총 {updated_cnt}건의 최신 가격이 성공적으로 동기화되었습니다!", icon="✅")
+                if updated_cnt > 0:
+                    st.toast(f"⚡ 총 {updated_cnt}건의 최신 가격이 성공적으로 동기화되었습니다!", icon="✅")
+                else:
+                    st.toast("🚨 무신사 차단으로 인해 가격 동기화에 실패했습니다.", icon="⚠️")
                 time.sleep(0.3)
                 st.rerun()
 
