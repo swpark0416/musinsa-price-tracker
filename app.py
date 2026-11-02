@@ -146,7 +146,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다 (우회 엔드포인트 및 타임아웃 확장)."""
+    """무신사 상품 정보 및 브랜드명을 수집합니다."""
     headers_list = [
         {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
@@ -256,13 +256,13 @@ def load_tracked_products():
         return pd.DataFrame()
 
 def load_price_logs():
+    """가격 로그를 최신순으로 10,000개까지 충분히 불러와 짤림을 방지합니다."""
     try:
-        res = supabase.table("price_logs").select("*").order("created_at", desc=False).execute()
+        res = supabase.table("price_logs").select("*").order("created_at", desc=True).limit(10000).execute()
         df = pd.DataFrame(res.data)
         if not df.empty:
             df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
             df = df.dropna(subset=["created_at"])
-            df = df.sort_values("created_at", ascending=True) # 생성시간 기준 오름차순 정렬
 
             df["created_at_kst"] = df["created_at"].dt.tz_convert("Asia/Seoul")
             df["date_str"] = df["created_at_kst"].dt.strftime("%m/%d")         # 차트용 MM/DD 표기
@@ -272,11 +272,12 @@ def load_price_logs():
                 lambda r: round(((r["normal_price"] - r["price"]) / r["normal_price"]) * 100, 1) 
                 if r["normal_price"] > r["price"] else 0, axis=1
             )
+            df = df.sort_values("created_at", ascending=True) # 차트 생성을 위해 다시 오름차순 정렬
         return df
     except Exception:
         return pd.DataFrame()
 
-# 오늘 가격 자동/수동 동기화 함수 (force=True 지정 시 수동 강제 업데이트)
+# 오늘 가격 자동/수동 동기화 함수
 def sync_today_prices_if_needed(products_df, force=False):
     if products_df.empty:
         return 0
