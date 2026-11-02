@@ -146,7 +146,7 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id):
-    """무신사 상품 정보 및 브랜드명을 수집합니다."""
+    """무신사 상품 정보 및 최저 쿠폰적용가를 수집합니다."""
     headers_list = [
         {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/4.88.0",
@@ -188,7 +188,15 @@ def get_musinsa_goods_info(goods_id):
                             goods_name = data.get("goodsNm") or data.get("goodsName") or data.get("name") or data.get("title")
                             brand_name = extract_brand_name(raw_text, data)
 
-                            price = data.get("price") or data.get("salePrice") or data.get("finalPrice")
+                            # 쿠폰적용가 / 최저혜택가를 최우선으로 탐색
+                            price = (
+                                data.get("couponPrice") or 
+                                data.get("maxDiscountPrice") or 
+                                data.get("appliedCouponPrice") or 
+                                data.get("price") or 
+                                data.get("salePrice") or 
+                                data.get("finalPrice")
+                            )
                             normal_price = data.get("normalPrice") or data.get("originalPrice") or price
 
                             if goods_name and price:
@@ -215,6 +223,8 @@ def get_musinsa_goods_info(goods_id):
                         re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
                     )
                     price_match = (
+                        re.search(r'"couponPrice"\s*:\s*(\d+)', raw_text) or
+                        re.search(r'"maxDiscountPrice"\s*:\s*(\d+)', raw_text) or
                         re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text) or
                         re.search(r'"price"\s*:\s*(\d+)', raw_text) or
                         re.search(r'"salePrice"\s*:\s*(\d+)', raw_text)
@@ -256,7 +266,7 @@ def load_tracked_products():
         return pd.DataFrame()
 
 def load_price_logs():
-    """가격 로그를 최신순으로 10,000개까지 충분히 불러와 짤림을 방지합니다."""
+    """가격 로그를 최신순으로 10,000개까지 불러와 데이터 짤림을 방지합니다."""
     try:
         res = supabase.table("price_logs").select("*").order("created_at", desc=True).limit(10000).execute()
         df = pd.DataFrame(res.data)
