@@ -266,25 +266,27 @@ def load_price_logs():
     except Exception:
         return pd.DataFrame()
 
-# 앱 접속 시 오늘 가격 자동 동기화 함수
-def sync_today_prices_if_needed(products_df):
+# 오늘 가격 자동/수동 동기화 함수 (force=True 지정 시 수동 강제 업데이트)
+def sync_today_prices_if_needed(products_df, force=False):
     if products_df.empty:
-        return
+        return 0
 
     today_str = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     
-    try:
-        today_start = f"{today_str}T00:00:00Z"
-        res = supabase.table("price_logs").select("goods_id").gte("created_at", today_start).execute()
-        synced_goods_ids = set([row["goods_id"] for row in res.data]) if res.data else set()
-    except Exception:
-        synced_goods_ids = set()
+    synced_goods_ids = set()
+    if not force:
+        try:
+            today_start = f"{today_str}T00:00:00Z"
+            res = supabase.table("price_logs").select("goods_id").gte("created_at", today_start).execute()
+            synced_goods_ids = set([row["goods_id"] for row in res.data]) if res.data else set()
+        except Exception:
+            synced_goods_ids = set()
 
-    unsynced_products = products_df[~products_df["goods_id"].isin(synced_goods_ids)]
+    target_products = products_df if force else products_df[~products_df["goods_id"].isin(synced_goods_ids)]
     
-    if not unsynced_products.empty:
-        updated_count = 0
-        for idx, row in unsynced_products.iterrows():
+    updated_count = 0
+    if not target_products.empty:
+        for idx, row in target_products.iterrows():
             g_id = row["goods_id"]
             info = get_musinsa_goods_info(g_id)
             if info:
@@ -299,9 +301,7 @@ def sync_today_prices_if_needed(products_df):
                 except Exception:
                     pass
                 time.sleep(0.2)
-        
-        if updated_count > 0:
-            st.toast(f"⚡ 오늘자 신규 가격 정보({updated_count}건)가 자동으로 동기화되었습니다!", icon="✅")
+    return updated_count
 
 # 당일 최신화 상태 확인 헬퍼
 def get_today_sync_status_badge(logs_df):
@@ -354,13 +354,23 @@ with main_tab1:
 
         logs_df = load_price_logs()
 
-        # 최상단 당일 최신화 상태 표시
-        sync_badge = get_today_sync_status_badge(logs_df)
-        st.markdown(f"""
-        <div style="background-color: #ebfbee; padding: 8px 12px; border-radius: 6px; border: 1px solid #b2f2bb; font-size: 12px; font-weight: bold; color: #2b8a3e; margin-bottom: 12px;">
-            {sync_badge}
-        </div>
-        """, unsafe_allow_html=True)
+        # 최상단 당일 최신화 상태 및 수동 가격 업데이트 버튼
+        col_badge, col_sync_btn = st.columns([3, 1])
+        with col_badge:
+            sync_badge = get_today_sync_status_badge(logs_df)
+            st.markdown(f"""
+            <div style="background-color: #ebfbee; padding: 8px 12px; border-radius: 6px; border: 1px solid #b2f2bb; font-size: 12px; font-weight: bold; color: #2b8a3e; margin-bottom: 12px;">
+                {sync_badge}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col_sync_btn:
+            if st.button("🔄 가격 업데이트", use_container_width=True, key="manual_price_sync_btn"):
+                with st.spinner("🔄 오늘 자 최신 가격 수집 중..."):
+                    updated_cnt = sync_today_prices_if_needed(products_df, force=True)
+                st.toast(f"⚡ 총 {updated_cnt}건의 최신 가격이 성공적으로 동기화되었습니다!", icon="✅")
+                time.sleep(0.3)
+                st.rerun()
 
         # DB에 등록된 기존 태그 추출
         existing_tags = set()
