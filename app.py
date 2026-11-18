@@ -280,10 +280,27 @@ def load_tracked_products():
         return pd.DataFrame()
 
 def load_price_logs():
-    """Supabase DB에서 최신순으로 최대 10,000건의 가격 로그를 불러옵니다."""
+    """Supabase의 1,000행 기본 제한을 우회하여 전체 기간의 가격 로그를 모두 불러옵니다."""
     try:
-        res = supabase.table("price_logs").select("*").order("created_at", desc=True).limit(10000).execute()
-        df = pd.DataFrame(res.data)
+        all_rows = []
+        batch_size = 1000
+        start = 0
+
+        while True:
+            res = (
+                supabase.table("price_logs")
+                .select("*")
+                .order("created_at", desc=True)
+                .range(start, start + batch_size - 1)
+                .execute()
+            )
+            batch = res.data or []
+            all_rows.extend(batch)
+            if len(batch) < batch_size:
+                break
+            start += batch_size
+
+        df = pd.DataFrame(all_rows)
         if not df.empty:
             df = df[df["price"] > 0]
             df["created_at"] = pd.to_datetime(df["created_at"], format='mixed', errors='coerce', utc=True)
