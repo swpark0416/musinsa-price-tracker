@@ -4,3 +4,4 @@ requests
 pandas
 plotly
 beautifulsoup4
+curl_cffi

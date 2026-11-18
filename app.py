@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client
 import plotly.express as px
 import requests
+from curl_cffi import requests as cffi_requests
 import json
 import re
 import time
@@ -86,10 +87,11 @@ def parse_goods_id(url_or_id):
     
     if text.startswith("http"):
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/5.12.0"
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ko-KR,ko;q=0.9"
         }
         try:
-            res = requests.get(text, headers=headers, allow_redirects=True, timeout=5)
+            res = cffi_requests.get(text, headers=headers, impersonate="chrome", allow_redirects=True, timeout=6)
             text = res.url
             
             match_body = re.search(r'musinsa\.com/(?:app/goods|products)/(\d+)', res.text)
@@ -147,22 +149,13 @@ def extract_brand_name(raw_text, data=None):
     return "MUSINSA"
 
 def get_musinsa_goods_info(goods_id, debug_errors=None):
-    """무신사 상품 정보 및 최저 쿠폰적용가를 수집하고 실패 사유를 기록합니다."""
-    headers_list = [
-        {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Musinsa/5.12.0",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "ko-KR,ko;q=0.9",
-            "Referer": f"https://www.musinsa.com/products/{goods_id}",
-            "Origin": "https://www.musinsa.com"
-        },
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.musinsa.com/"
-        }
-    ]
+    """브라우저 TLS 지문 위장(curl_cffi)으로 무신사 상품 정보 및 쿠폰적용가를 수집합니다."""
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": f"https://www.musinsa.com/products/{goods_id}",
+        "Origin": "https://www.musinsa.com"
+    }
 
     endpoints = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_id}",
@@ -171,107 +164,103 @@ def get_musinsa_goods_info(goods_id, debug_errors=None):
         f"https://www.musinsa.com/products/{goods_id}"
     ]
 
-    session = requests.Session()
     last_reason = "알 수 없는 오류"
 
-    for headers in headers_list:
-        for url in endpoints:
+    for url in endpoints:
+        try:
+            res = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=8)
+
+            if res.status_code != 200:
+                last_reason = f"HTTP {res.status_code} 차단/오류"
+                continue
+
+            raw_text = res.text
+
+            # 1. JSON 파싱 (중첩된 goodsPrice 구조 및 쿠폰적용가 포함)
             try:
-                res = session.get(url, headers=headers, timeout=6)
+                json_obj = res.json()
+                if isinstance(json_obj, dict):
+                    data = json_obj.get("data") if isinstance(json_obj.get("data"), dict) else json_obj
+                    price_obj = data.get("goodsPrice") if isinstance(data.get("goodsPrice"), dict) else data
 
-                if res.status_code != 200:
-                    last_reason = f"HTTP {res.status_code} 차단/오류"
-                    continue
+                    goods_name = (
+                        data.get("goodsNm") or data.get("goodsName") or
+                        data.get("name") or data.get("title")
+                    )
+                    brand_name = extract_brand_name(raw_text, data)
 
-                raw_text = res.text
+                    price = (
+                        price_obj.get("couponPrice") or
+                        price_obj.get("maxDiscountPrice") or
+                        price_obj.get("appliedCouponPrice") or
+                        price_obj.get("salePrice") or
+                        price_obj.get("price") or
+                        price_obj.get("finalPrice")
+                    )
+                    normal_price = (
+                        price_obj.get("normalPrice") or
+                        price_obj.get("originalPrice") or
+                        price
+                    )
 
-                # 1. JSON 파싱 (중첩된 goodsPrice 구조 및 쿠폰적용가 포함)
-                try:
-                    json_obj = res.json()
-                    if isinstance(json_obj, dict):
-                        data = json_obj.get("data") if isinstance(json_obj.get("data"), dict) else json_obj
-                        price_obj = data.get("goodsPrice") if isinstance(data.get("goodsPrice"), dict) else data
+                    if goods_name and price:
+                        price = int(price)
+                        normal_price = int(normal_price) if normal_price else price
+                        discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
-                        goods_name = (
-                            data.get("goodsNm") or data.get("goodsName") or
-                            data.get("name") or data.get("title")
-                        )
-                        brand_name = extract_brand_name(raw_text, data)
+                        return {
+                            "goods_id": str(goods_id),
+                            "goods_name": goods_name,
+                            "brand_name": brand_name,
+                            "category": "의류",
+                            "normal_price": normal_price,
+                            "price": price,
+                            "discount_rate": discount_rate,
+                            "url": f"https://www.musinsa.com/products/{goods_id}"
+                        }
+            except Exception:
+                pass
 
-                        price = (
-                            price_obj.get("couponPrice") or
-                            price_obj.get("maxDiscountPrice") or
-                            price_obj.get("appliedCouponPrice") or
-                            price_obj.get("salePrice") or
-                            price_obj.get("price") or
-                            price_obj.get("finalPrice")
-                        )
-                        normal_price = (
-                            price_obj.get("normalPrice") or
-                            price_obj.get("originalPrice") or
-                            price
-                        )
+            # 2. HTML / 인라인 JSON 정규식 추출
+            name_match = (
+                re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
+                re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
+                re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
+            )
+            price_match = (
+                re.search(r'"couponPrice"\s*:\s*(\d+)', raw_text) or
+                re.search(r'"maxDiscountPrice"\s*:\s*(\d+)', raw_text) or
+                re.search(r'"salePrice"\s*:\s*(\d+)', raw_text) or
+                re.search(r'"price"\s*:\s*(\d+)', raw_text) or
+                re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text)
+            )
+            normal_price_match = (
+                re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
+                re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
+            )
 
-                        if goods_name and price:
-                            price = int(price)
-                            normal_price = int(normal_price) if normal_price else price
-                            discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
+            if name_match and price_match:
+                goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
+                brand_name = extract_brand_name(raw_text)
+                price = int(price_match.group(1))
+                normal_price = int(normal_price_match.group(1)) if normal_price_match else price
+                discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
-                            return {
-                                "goods_id": str(goods_id),
-                                "goods_name": goods_name,
-                                "brand_name": brand_name,
-                                "category": "의류",
-                                "normal_price": normal_price,
-                                "price": price,
-                                "discount_rate": discount_rate,
-                                "url": f"https://www.musinsa.com/products/{goods_id}"
-                            }
-                except Exception:
-                    pass
+                return {
+                    "goods_id": str(goods_id),
+                    "goods_name": goods_name,
+                    "brand_name": brand_name,
+                    "category": "의류",
+                    "normal_price": normal_price,
+                    "price": price,
+                    "discount_rate": discount_rate,
+                    "url": f"https://www.musinsa.com/products/{goods_id}"
+                }
 
-                # 2. HTML / 인라인 JSON 정규식 추출
-                name_match = (
-                    re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', raw_text) or
-                    re.search(r'"goodsNm"\s*:\s*"([^"]+)"', raw_text) or
-                    re.search(r'"goodsName"\s*:\s*"([^"]+)"', raw_text)
-                )
-                price_match = (
-                    re.search(r'"couponPrice"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"maxDiscountPrice"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"salePrice"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"price"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'<meta\s+property="product:price:amount"\s+content="(\d+)"', raw_text)
-                )
-                normal_price_match = (
-                    re.search(r'"normalPrice"\s*:\s*(\d+)', raw_text) or
-                    re.search(r'"originalPrice"\s*:\s*(\d+)', raw_text)
-                )
+            last_reason = "HTTP 200 응답 후 데이터 파싱 실패"
 
-                if name_match and price_match:
-                    goods_name = name_match.group(1).replace(" - 무신사", "").replace(" - MUSINSA", "").strip()
-                    brand_name = extract_brand_name(raw_text)
-                    price = int(price_match.group(1))
-                    normal_price = int(normal_price_match.group(1)) if normal_price_match else price
-                    discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
-
-                    return {
-                        "goods_id": str(goods_id),
-                        "goods_name": goods_name,
-                        "brand_name": brand_name,
-                        "category": "의류",
-                        "normal_price": normal_price,
-                        "price": price,
-                        "discount_rate": discount_rate,
-                        "url": f"https://www.musinsa.com/products/{goods_id}"
-                    }
-
-                last_reason = "HTTP 200 응답 후 데이터 파싱 실패(구조 변경/캡차)"
-
-            except requests.exceptions.Timeout:
-                last_reason = "요청 시간 초과(Timeout)"
-            except Exception as e:
-                last_reason = f"연결 오류({type(e).__name__})"
+        except Exception as e:
+            last_reason = f"연결 오류({type(e).__name__})"
 
     if debug_errors is not None:
         debug_errors.append(last_reason)
