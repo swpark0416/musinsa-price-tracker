@@ -537,10 +537,28 @@ with main_tab1:
             if filtered_tracked.empty:
                 st.info(f"선택한 **{selected_manage_tag}** 태그에 해당하는 상품이 없습니다.")
             else:
+                # 브랜드명 가나다순(오름차순) 및 동일 브랜드 내 상품명순 정렬
+                if "brand_name" in filtered_tracked.columns:
+                    filtered_tracked["_sort_brand"] = (
+                        filtered_tracked["brand_name"]
+                        .fillna("무신사")
+                        .astype(str)
+                        .str.strip()
+                        .replace("", "무신사")
+                        .str.lower()
+                    )
+                else:
+                    filtered_tracked["_sort_brand"] = "무신사"
+
+                filtered_tracked = filtered_tracked.sort_values(
+                    by=["_sort_brand", "goods_name"],
+                    ascending=[True, True]
+                )
+
                 cards_html_list = []
 
                 for _, row in filtered_tracked.iterrows():
-                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) else "무신사"
+                    brand = row.get("brand_name") if "brand_name" in row and pd.notna(row.get("brand_name")) and str(row.get("brand_name")).strip() else "무신사"
                     curr_tag = row.get("tags") if pd.notna(row.get("tags")) and str(row.get("tags")).strip() else "태그없음"
 
                     p_logs = logs_df[logs_df["goods_id"] == row["goods_id"]] if not logs_df.empty else pd.DataFrame()
@@ -608,7 +626,7 @@ with main_tab1:
                 st.markdown("#### ⚙️ 상품 관리 (태그 수정 / 삭제)")
                 
                 manage_options = {
-                    f"[{r.get('brand_name', '무신사')}] {r['goods_name']}": r
+                    f"[{r.get('brand_name') if pd.notna(r.get('brand_name')) and str(r.get('brand_name')).strip() else '무신사'}] {r['goods_name']}": r
                     for _, r in filtered_tracked.iterrows()
                 }
 
