@@ -6,6 +6,7 @@ from curl_cffi import requests as cffi_requests
 import json
 import re
 import time
+import random
 
 # 페이지 기본 설정
 st.set_page_config(page_title="무신사 스마트 트래커", page_icon="🛍️", layout="wide")
@@ -77,7 +78,7 @@ if qp.get("tab") == "detail" and "goods_id" in qp:
     st.query_params.clear()
 
 # ---------------------------------------------------------
-# 무신사 크롤링 및 파싱 함수 (신규 상품 등록 / 실시간 조회용)
+# 무신사 크롤링 및 파싱 함수
 # ---------------------------------------------------------
 def parse_goods_id(url_or_id):
     """공유 링크, 단축 URL, 일반 웹주소에서 진짜 상품 ID를 추출합니다."""
@@ -146,6 +147,50 @@ def extract_brand_name(raw_text, data=None):
                 return val
     return "MUSINSA"
 
+def extract_prices_from_json(obj):
+    """JSON 객체 전체를 탐색해 0보다 큰 쿠폰가/판매가와 정가를 추출합니다."""
+    sale_candidates = []
+    normal_candidates = []
+
+    sale_keys = (
+        "couponPrice",
+        "maxDiscountPrice",
+        "appliedCouponPrice",
+        "salePrice",
+        "goodsSalePrice",
+        "price",
+        "finalPrice",
+    )
+    normal_keys = ("normalPrice", "originalPrice", "goodsNormalPrice")
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in sale_keys and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                    sale_candidates.append((sale_keys.index(k), int(v)))
+                elif k in normal_keys and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                    normal_candidates.append((normal_keys.index(k), int(v)))
+                elif isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(obj)
+    if not sale_candidates:
+        return None
+
+    sale_candidates.sort(key=lambda x: x[0])
+    best_sale = sale_candidates[0][1]
+
+    if normal_candidates:
+        normal_candidates.sort(key=lambda x: x[0])
+        best_normal = max(normal_candidates[0][1], best_sale)
+    else:
+        best_normal = best_sale
+
+    return best_normal, best_sale
+
 def get_musinsa_goods_info(goods_id, debug_errors=None):
     """무신사 상품 정보 및 쿠폰적용가를 수집합니다."""
     headers = {
@@ -179,31 +224,15 @@ def get_musinsa_goods_info(goods_id, debug_errors=None):
                 json_obj = res.json()
                 if isinstance(json_obj, dict):
                     data = json_obj.get("data") if isinstance(json_obj.get("data"), dict) else json_obj
-                    price_obj = data.get("goodsPrice") if isinstance(data.get("goodsPrice"), dict) else data
-
                     goods_name = (
                         data.get("goodsNm") or data.get("goodsName") or
                         data.get("name") or data.get("title")
                     )
                     brand_name = extract_brand_name(raw_text, data)
+                    parsed_prices = extract_prices_from_json(json_obj)
 
-                    price = (
-                        price_obj.get("couponPrice") or
-                        price_obj.get("maxDiscountPrice") or
-                        price_obj.get("appliedCouponPrice") or
-                        price_obj.get("salePrice") or
-                        price_obj.get("price") or
-                        price_obj.get("finalPrice")
-                    )
-                    normal_price = (
-                        price_obj.get("normalPrice") or
-                        price_obj.get("originalPrice") or
-                        price
-                    )
-
-                    if goods_name and price and int(price) > 0:
-                        price = int(price)
-                        normal_price = int(normal_price) if normal_price and int(normal_price) > 0 else price
+                    if goods_name and parsed_prices and parsed_prices[1] > 0:
+                        normal_price, price = parsed_prices
                         discount_rate = round(((normal_price - price) / normal_price) * 100, 1) if normal_price > price else 0
 
                         return {
@@ -268,6 +297,29 @@ def get_musinsa_goods_info(goods_id, debug_errors=None):
     if debug_errors is not None:
         debug_errors.append(last_reason)
     return None
+
+def force_sync_all_products(products_df, error_reasons=None):
+    """당일 이미 수집했더라도 무시하고 전체 추적 상품의 가격을 강제로 다시 수집합니다."""
+    if products_df.empty:
+        return 0
+
+    updated_count = 0
+    for _, row in products_df.iterrows():
+        g_id = str(row["goods_id"])
+        info = get_musinsa_goods_info(g_id, debug_errors=error_reasons)
+        if info and info.get("price", 0) > 0:
+            log_data = {
+                "goods_id": info["goods_id"],
+                "normal_price": info["normal_price"],
+                "price": info["price"]
+            }
+            try:
+                supabase.table("price_logs").insert(log_data).execute()
+                updated_count += 1
+            except Exception:
+                pass
+        time.sleep(random.uniform(0.6, 1.2))
+    return updated_count
 
 # ---------------------------------------------------------
 # DB 데이터 조회 헬퍼
@@ -362,8 +414,8 @@ with main_tab1:
         tracked_df = products_df
         logs_df = load_price_logs()
 
-        # 최상단 당일 최신화 상태 배지 및 DB 새로고침 버튼
-        col_badge, col_refresh_btn = st.columns([3, 1])
+        # 최상단 당일 최신화 상태 배지 및 새로고침 / 강제 재수집 버튼
+        col_badge, col_refresh_btn, col_force_btn = st.columns([2.2, 0.9, 1.1])
         with col_badge:
             sync_badge, bg_c, bd_c, txt_c = get_today_sync_status_badge(logs_df)
             st.markdown(f"""
@@ -375,6 +427,19 @@ with main_tab1:
         with col_refresh_btn:
             if st.button("🔄 새로고침", use_container_width=True, key="db_refresh_btn"):
                 st.rerun()
+
+        with col_force_btn:
+            if st.button("⚡ 강제 재수집", use_container_width=True, key="force_price_sync_btn"):
+                error_reasons = []
+                with st.spinner("⚡ 기존 수집 여부와 무관하게 전체 상품 가격을 다시 수집하는 중..."):
+                    updated_cnt = force_sync_all_products(products_df, error_reasons=error_reasons)
+                if updated_cnt > 0:
+                    st.toast(f"⚡ 총 {updated_cnt}건의 가격이 새로 수집되어 반영되었습니다!", icon="✅")
+                    time.sleep(0.4)
+                    st.rerun()
+                else:
+                    sample_reason = error_reasons[0] if error_reasons else "추적 상품 목록 비어있음"
+                    st.error(f"🚨 재수집 실패 (사유: {sample_reason}) — 클라우드 IP 차단 시 PC의 force_sync.bat을 실행해 주세요.")
 
         # DB에 등록된 기존 태그 추출
         existing_tags = set()
